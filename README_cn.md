@@ -45,8 +45,8 @@ OpenSocket的技术特点：
 ## 1.简单的Http
 创建5条线程，1条线程封装成监听者Listener，另外4条线程封装成接收者Accepter。
 
-监听者Listener负责监听socket连接，监听到socket后，就把fd发给其中一个接收者Accepter；
-接收者Accepter接收到socket的fd后，启动打开socket，与客户端连接socket连接。
+监听者Listener负责监听socket连接事件，监听到socket新连接事件后，就把fd发给其中一个接收者Accepter；
+接收者Accepter接收到socket的fd后，打开该socket连接，与客户端进行网络通信。
 
 此简单的Http接收到Http报文后，进行response一份Http报文，然后关闭socket完成Http短连接操作。
 
