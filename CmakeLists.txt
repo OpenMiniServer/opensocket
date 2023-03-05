@@ -1,0 +1,27 @@
+
+CMAKE_MINIMUM_REQUIRED(VERSION 3.12.1)
+PROJECT(opensocket)
+
+include_directories(src)
+
+if(CMAKE_SYSTEM_NAME MATCHES "Windows")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /utf-8")
+else()  
+    link_libraries(pthread)
+endif()
+
+
+set(SRC 
+	src/socket_os.h 
+	src/socket_os.c 
+	src/opensocket.h 
+	src/opensocket.cpp
+
+	test/worker.h
+	test/openthread.h
+	test/openthread.cpp
+)
+
+add_executable(http ${SRC} test/http.cpp)
+add_executable(tcp ${SRC} test/tcp.cpp)
+#add_executable(udp ${SRC} test/udp.cpp)

@@ -1,54 +1,56 @@
 # OpenSocket
-OpenSocket is a super simple and easy-to-use cross-platform high-performance network concurrency library.
+OpenSocket是一个超简单易用的跨平台高性能网络并发库。
 
-Combined with OpenThread, you can easily build high-performance concurrent servers on any platform (including mobile platforms).
+结合OpenThread使用，可以轻轻构建在任意平台（包括移动平台）构建高性能并发服务器。
 
-OpenSocket is designed for all platforms with no other dependencies and only 4 source files, making it easy for beginners to play with C++ high-performance network concurrency development.
+OpenSocket全平台设计，无其他依赖，只有4个源文件，让小白都可以轻松玩转C++高性能网络并发开发。
 
-***The OpenLinyou project designs a cross-platform server framework. Write code in VS or XCode and run it on Linux without any changes, even on Android and iOS.***
+***OpenLinyou项目设计跨平台服务器框架，在VS或者XCode上写代码，无需任何改动就可以编译运行在Linux上，甚至是安卓和iOS.***
 OpenLinyou：https://github.com/openlinyou
 
-## Cross-platform support
-Linux and Android use epoll, iOS and Mac use kqueue, other systems (Windows) use select, so the number of io cannot exceed 64.
+## 跨平台支持
+Linux和安卓使用epoll，iOS和Mac使用kqueue，其他系统（Windows）使用select，故io数量不能超过64个。
 
-## Compilation and execution
-Please install the cmake tool. With cmake you can build a VS or XCode project and compile and run it on VS or XCode. 
-Source code:https://github.com/openlinyou/opensocket
+## 编译和执行
+请安装cmake工具，用cmake可以构建出VS或者XCode工程，就可以在vs或者xcode上编译运行。
+源代码：https://github.com/openlinyou/opensocket
 ```
-# Clone the project
+#克隆项目
 git clone https://github.com/openlinyou/opensocket
 cd ./opensocket
-# Create a build project directory
+#创建build工程目录
 mkdir build
 cd build
 cmake ..
-# If it's win32, opensocket.sln will appear in this directory. Click it to start VS for coding and debugging.
+#如果是win32，在该目录出现opensocket.sln，点击它就可以启动vs写代码调试
 make
 ./http
-# Visit with browser: http://127.0.0.1:8888
+#浏览器访问:http://127.0.0.1:8888
 ```
 
-## All source files
-+ src/socket_os.h
-+ src/socket_os.c
-+ src/opensocket.h
-+ src/opensocket.cpp
+## 全部源文件
+. src/socket_os.h
+. src/socket_os.c
+. src/opensocket.h
+. src/opensocket.cpp
 
-## Technical features
-The technical features of OpenSocket:
-1. Cross-platform design, providing a unified socket interface for Linux, supporting Android and iOS.
-2. Linux and Android use epoll, iOS and Mac use kqueue, other systems (Windows) use select.
-3. Supports IPv6, small and miniaturized; used with OpenThread to easily build an Actor Model framework.
+## 技术特点
+OpenSocket的技术特点：
+1. 跨平台设计，提供Linux统一的socket接口，支持安卓和iOS。
+2. Linux和安卓使用epoll，iOS和Mac使用kqueue，其他系统（Windows）使用select。
+3. 支持IPv6，小巧迷你，配合OpenThread使用，轻轻构建Actor Model框架。
 
 
-## 1.Simple Http
-Create 5 threads: 1 thread is encapsulated as a Listener and the other 4 threads are encapsulated as Accepters.
+## 1.简单的Http
+创建5条线程，1条线程封装成监听者Listener，另外4条线程封装成接收者Accepter。
 
-The Listener is responsible for listening to socket connections. After listening to the socket, it sends the fd to one of the Accepters; After receiving the socket’s fd from the Listener, the Accepter opens the socket and connects with the client’s socket connection.
+监听者Listener负责监听socket连接，监听到socket后，就把fd发给其中一个接收者Accepter；
+接收者Accepter接收到socket的fd后，启动打开socket，与客户端连接socket连接。
 
-After receiving an Http message from this simple Http server, it responds with an Http message and then closes the socket to complete an Http short connection operation.
+此简单的Http接收到Http报文后，进行response一份Http报文，然后关闭socket完成Http短连接操作。
 
-OpenSocket is a wrapper for poll; only one OpenSocket object needs to be created per process. Since Windows uses select scheme, number of sockets cannot exceed 64.
+OpenSocket是对poll的封装，一个进程只需要创建一个OpenSocket对象。
+由于Windows使用select方案，socket数量不能超过64个。
 
 ```C++
 #include <assert.h>
@@ -62,10 +64,9 @@ using namespace open;
 
 const std::string TestServerIp_ = "0.0.0.0";
 const int TestServerPort_ = 8888;
-//OpenSocket object; only one OpenSocket object needs to be created per process. 
+//OpenSocket对象，一个进程只需要创建一个OpenSocket对象。
 static OpenSocket openSocket_;
-// The message callback function of OpenSocket is executed by an internal thread 
-// and must immediately dispatch the message to other threads for processing.
+//OpenSocket的消息回调函数，内部线程执行，必须立刻把消息派发给其他线程处理。
 static void SocketFunc(const OpenSocketMsg* msg)
 {
     if (msg->uid_ >= 0)
@@ -87,7 +88,7 @@ struct ProtoBuffer
     int accept_fd_;
     std::string addr_;
 };
-//Listen to socket connection events and send socket connection events to the accepter.
+//监听socket连接事件，把socket连接事件发给接收者
 class Listener : public Worker
 {
     std::set<int> setSlaveId_;
@@ -107,18 +108,17 @@ public:
     virtual ~Listener() {}
     virtual void onStart()
     {
-        // Start socket listen. 
+        //启动listen
         listen_fd_ = openSocket_.listen((uintptr_t)pid(), TestServerIp_, TestServerPort_, 64);
         if (listen_fd_ < 0)
         {
             printf("Listener::onStart faild listen_fd_ = %d\n", listen_fd_);
             assert(false);
         }
-        // The function of start is to start poll listening and listen to messages from listen_fd_.
+        //start的作用是开启poll监听，监听listen_fd_的消息。
         openSocket_.start((uintptr_t)pid(), listen_fd_);
     }
-    // Receive registration messages from accepters; 
-    // sockets that are listened to will be sent to accepters for processing.
+    //接收接收者的注册消息，监听到的socket事件会发给接收者处理
     void regist_slave(const Data& data)
     {
         auto proto = data.proto<std::string>();
@@ -138,8 +138,7 @@ public:
             }
         }
     }
-    // Send the listened fd and ip to one of the accepters; 
-    // at this time the new socket has not yet opened a connection.
+    //把监听到的fd和ip发给其中一个接收者，此时新socket还没有打开连接
     void notify(int accept_fd, const std::string& addr)
     {
         if (!vectSlaveId_.empty())
@@ -170,7 +169,7 @@ public:
         }
         switch (proto->type_)
         {
-            //Listen for socket connections
+            //监听socket连接
         case OpenSocket::ESocketAccept:
             notify(proto->ud_, proto->data());
             printf("Listener::onStart [%s]ESocketAccept:acceptFd = %d\n", ThreadName((int)proto->uid_).c_str(), proto->ud_);
@@ -198,16 +197,15 @@ public:
 };
 
 ////////////Accepter//////////////////////
-//client object
+//一个客户端对象
 struct Client
 {
-    int fd_; // socket’s fd 
+    int fd_; // socket的fd
     std::string addr_; //ip:port
-    std::string buffer_; //received network data
+    std::string buffer_; //接收到的网络数据
     Client() :fd_(-1) {}
 };
-
-//Receive the listener’s new socket fd, open the socket connection and communicate with the client.
+//接收监听者的fd，打开socket连接，负责与客户端通信
 class Accepter : public Worker
 {
     int listenId_;
@@ -219,7 +217,7 @@ public:
         :Worker(name),
         listenId_(-1)
     {
-        //Specify the number of sockets that the accepter can handle.
+        //指定接收者处理socket的个数。即可以与8个客户端通信。
         maxClient_ = 8;
         hashid_.init(maxClient_);
         vectClient_.resize(maxClient_);
@@ -228,16 +226,16 @@ public:
     virtual ~Accepter() {}
     virtual void onStart() 
     { 
-        //Wait for listener to start first.
+        //先等待listener启动完成
         while (listenId_ < 0)
         {
             listenId_ = ThreadId("listener");
             OpenThread::Sleep(1000);
         }
-        //Send registration message to listener.
+        //向listener发送注册消息
         send<std::string>(listenId_, "regist_slave", "listen success!");
     }
-    //Receive new socket messages from Listener and open socket connection to receive messages from clients.
+    //接收Listener的新socket消息，同时打开socket连接，接收客户端消息。
     void new_accept(const Data& data)
     {
         auto proto = data.proto<ProtoBuffer>();
@@ -263,7 +261,7 @@ public:
             vectClient_[idx].fd_ = accept_fd;
             vectClient_[idx].addr_ = proto->addr_;
             vectClient_[idx].buffer_.clear();
-            //Open socket connection and receive messages from clients. Add accept_fd to poll.
+            //打开socket连接，接收客户端消息。把accept_fd加入到poll。
             openSocket_.start(pid_, accept_fd);
         }
     }
@@ -296,7 +294,7 @@ public:
         std::string content;
         content.append("<div>It's work!</div><br/>" + client.addr_ + "request:" + url);
         std::string msg = "HTTP/1.1 200 OK\r\ncontent-length:" + std::to_string(content.size()) + "\r\n\r\n" + content;
-        //Send Http message to client.
+        //向客户端发送Http报文
         openSocket_.send(client.fd_, msg);
     }
     virtual void onSocket(const Data& data)
@@ -310,7 +308,7 @@ public:
         int idx = 0;
         switch (proto->type_)
         {
-            //Receive message from client. 
+            //接收客户端消息
         case OpenSocket::ESocketData:
             idx = hashid_.lookup(proto->fd_);
             if (idx < 0 || idx >= vectClient_.size())
@@ -321,7 +319,7 @@ public:
             vectClient_[idx].buffer_.append(proto->data(), proto->size());
             onReadHttp(vectClient_[idx]);
             break;
-            //Close connection with client message.
+            //与客户端关闭连接消息
         case OpenSocket::ESocketClose:
             idx = hashid_.remove(proto->fd_);
             if (idx >= 0 && idx < vectClient_.size())
@@ -330,7 +328,7 @@ public:
                 vectClient_[idx].buffer_.clear();
             }
             break;
-            //Error message when communicating with client. 
+            //与客户端通信发生错误消息
         case OpenSocket::ESocketError:
             idx = hashid_.remove(proto->fd_);
             if (idx >= 0 && idx < vectClient_.size())
@@ -343,7 +341,7 @@ public:
         case OpenSocket::ESocketWarning:
             printf("Accepter::onStart [%s]ESocketWarning:%s\n", ThreadName((int)proto->uid_).c_str(), proto->info());
             break;
-            //Open communication with client message. 
+            //打开客户端通信的消息
         case OpenSocket::ESocketOpen:
             idx = hashid_.lookup(proto->fd_);
             if (idx < 0 || idx >= vectClient_.size())
@@ -363,7 +361,7 @@ public:
 };
 int main()
 {
-    //Start OpenSocket; can only be started once
+    //启动OpenSocket，只能启动一次。
     openSocket_.run(SocketFunc);
     printf("start server==>>\n");
     std::vector<Worker*> vectServer = {
@@ -385,12 +383,12 @@ int main()
 }
 ```
 
-## 2.Socket TCP communication
-he Listener is responsible for listening to socket connection events and sending socket connection events to the Accepter.
+## 2.Socket的TCP通信
+Listener负责监听socket连接事件，发socket连接事件发给Accepter。
 
-The Accepter is responsible for receiving socket connection events sent by the Listener and communicating with the socket.
+Accepter负责接收Listener发过来的socket连接事件，并与socket进行通信。
 
-Client is a client cluster that can be used to perform stress tests on the server.
+Client是客户端集群，使用它可以对服务器进行压力测试。
 
 ```C++
 #include <assert.h>
@@ -852,5 +850,5 @@ int main()
 }
 ```
 
-## 3.Socket UDP communication 
-A UDP demo is not currently provided; it will only be considered if someone requests it.
+## 3.Socket的UDP通信
+暂时不提供UDP的demo，如果有人提需求，才考虑提供。
