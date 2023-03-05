@@ -5,7 +5,7 @@ OpenSocket是一个超简单易用的跨平台高性能网络并发库。
 
 OpenSocket全平台设计，无其他依赖，只有4个源文件，让小白都可以轻松玩转C++高性能网络并发开发。
 
-***OpenLinyou项目设计跨平台服务器框架，在VS或者XCode上写代码，无需任何改动就可以编译运行在Linux上，甚至是安卓和iOS.***
+**OpenLinyou项目设计跨平台服务器框架，在VS或者XCode上写代码，无需任何改动就可以编译运行在Linux上，甚至是安卓和iOS.**
 OpenLinyou：https://github.com/openlinyou
 
 ## 跨平台支持
@@ -30,10 +30,10 @@ make
 ```
 
 ## 全部源文件
-. src/socket_os.h
-. src/socket_os.c
-. src/opensocket.h
-. src/opensocket.cpp
++ src/socket_os.h
++ src/socket_os.c
++ src/opensocket.h
++ src/opensocket.cpp
 
 ## 技术特点
 OpenSocket的技术特点：

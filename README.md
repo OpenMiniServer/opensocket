@@ -5,7 +5,7 @@ Combined with OpenThread, you can easily build high-performance concurrent serve
 
 OpenSocket is designed for all platforms with no other dependencies and only 4 source files, making it easy for beginners to play with C++ high-performance network concurrency development.
 
-***The OpenLinyou project designs a cross-platform server framework. Write code in VS or XCode and run it on Linux without any changes, even on Android and iOS.***
+**The OpenLinyou project designs a cross-platform server framework. Write code in VS or XCode and run it on Linux without any changes, even on Android and iOS.**
 OpenLinyou：https://github.com/openlinyou
 
 ## Cross-platform support
