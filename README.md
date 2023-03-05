@@ -24,6 +24,7 @@ cd build
 cmake ..
 # If it's win32, opensocket.sln will appear in this directory. Click it to start VS for coding and debugging.
 make
+./tcp
 ./http
 # Visit with browser: http://127.0.0.1:8888
 ```

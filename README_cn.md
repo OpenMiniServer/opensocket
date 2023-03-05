@@ -24,6 +24,7 @@ cd build
 cmake ..
 #如果是win32，在该目录出现opensocket.sln，点击它就可以启动vs写代码调试
 make
+./tcp
 ./http
 #浏览器访问:http://127.0.0.1:8888
 ```
