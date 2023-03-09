@@ -3,7 +3,7 @@
 
 #include <assert.h>
 #include "opensocket.h"
-#include "openthread.h"
+#include "open/openthread.h"
 #include <map>
 #include <set>
 #include <memory>
@@ -18,16 +18,127 @@ enum EProtoType
     EProtoSocket
 };
 
-class Hashid 
+class Data
+{
+    int srcPid_;
+    EProtoType ptype_;
+    std::string srcName_;
+    std::string key_;
+    std::shared_ptr<const void> proto_;
+    Data(const Data& that) {}
+    void operator=(const Data& that) {}
+
+public:
+    Data() :srcPid_(-1), ptype_(EProtoText) {}
+    Data(int pid, const std::string& name, const std::string& key)
+        :srcPid_(pid), srcName_(name), key_(key) {}
+    ~Data() { }
+
+    inline const int& srcPid() const { return srcPid_; }
+    inline const EProtoType& ptype() const { return ptype_; }
+    inline const std::string& srcName() const { return srcName_; }
+    inline const std::string& key() const { return key_; }
+
+    template <class T>
+    inline const T* proto() const 
+    { 
+        return dynamic_cast<const T*>((const T*)proto_.get());
+    }
+    inline void setProto(EProtoType ptype, const std::shared_ptr<const void>& proto) { ptype_ = ptype; proto_ = proto; }
+
+};
+
+class Worker;
+typedef void(Worker::* Handle)(const Data&);
+struct Rpc
+{
+    Handle handle_;
+};
+
+class Worker : public OpenThreader
+{
+public:
+    Worker(const std::string& name)
+        :OpenThreader(name){}
+    virtual ~Worker() {}
+    template <class T>
+    bool send(int sid, const std::string& key, const T& t)
+    {
+        printf("[%s]send=>[%s] key:%s\n", name_.c_str(), ThreadName(sid).c_str(), key.c_str());
+        auto data = std::shared_ptr<Data>(new Data(pid(), name_, key));
+        auto proto = std::shared_ptr<const T>(new const T(t));
+        data->setProto(EProtoText, proto);
+        bool ret = OpenThread::Send(sid, data);
+        assert(ret);
+        return ret;
+    }
+    void onText(const Data& data)
+    {
+        printf("[%s]receive<<=[%s] key:%s\n", name_.c_str(), data.srcName().c_str(), data.key().c_str());
+        auto iter = mapKeyFunc_.find(data.key());
+        if (iter != mapKeyFunc_.end())
+        {
+            auto& rpc = iter->second;
+            if (rpc.handle_)
+            {
+                (this->*rpc.handle_)(data); 
+                return;
+            }
+        }
+        printf("[%s]no implement key:%s\n", name_.c_str(), data.key().c_str());
+    }
+    virtual void onSocket(const Data& data)
+    {
+    }
+    virtual void onMsg(OpenThreadMsg& msg)
+    {
+        const Data* data = msg.data<Data>();
+        if (data)
+        {
+            if (data->ptype() == EProtoText)
+                onText(*data);
+            else if (data->ptype() == EProtoSocket)
+                onSocket(*data);
+        }
+    }
+    std::map<std::string, Rpc> mapKeyFunc_;
+};
+
+class App
+{
+    static void SocketFunc(const OpenSocketMsg* msg)
+    {
+        if (msg->uid_ >= 0)
+        {
+            auto data = std::shared_ptr<Data>(new Data());
+            auto proto = std::shared_ptr<const OpenSocketMsg>(msg);
+            data->setProto(EProtoSocket, proto);
+            bool ret = OpenThread::Send((int)msg->uid_, data);
+            assert(ret);
+        }
+        else
+            delete msg;
+    }
+public:
+    static App Instance_;
+    OpenSocket openSocket_;
+    App()
+    {
+        openSocket_.run(App::SocketFunc);
+    }
+};
+App App::Instance_;
+
+class Hashid
 {
     struct Node
     {
         int id_;
         Node* next_;
     };
-    int hashmod_;
     int cap_;
     int count_;
+    int hashmod_;
     Node* id_;
     Node** hash_;
 public:
@@ -38,10 +149,8 @@ public:
         count_(0),
         hashmod_(0)
     {}
-    ~Hashid()
-    {
-        clear();
-    }
+    ~Hashid() { clear(); }
+    inline int full() { return count_ == cap_; }
     void clear()
     {
         if (id_)
@@ -55,7 +164,7 @@ public:
             hash_ = 0;
         }
     }
-    void init(int max) 
+    void init(int max)
     {
         clear();
         int hashcap = 16;
@@ -67,14 +176,13 @@ public:
         count_ = 0;
         id_ = new Node[max];
         for (int i = 0; i < max; i++) {
-            id_[i].id_   = -1;
+            id_[i].id_ = -1;
             id_[i].next_ = NULL;
         }
-        hash_ = new Node*[hashcap];
+        hash_ = new Node * [hashcap];
         memset(hash_, 0, hashcap * sizeof(Node*));
     }
-
-    int lookup(int id) 
+    int lookup(int id)
     {
         int h = id & hashmod_;
         Node* c = hash_[h];
@@ -85,8 +193,7 @@ public:
         }
         return -1;
     }
-
-    int remove(int id) 
+    int remove(int id)
     {
         int h = id & hashmod_;
         Node* c = hash_[h];
@@ -112,8 +219,7 @@ public:
         --count_;
         return (int)(c - id_);
     }
-
-    int insert(int id) 
+    int insert(int id)
     {
         Node* c = NULL;
         for (int i = 0; i < cap_; ++i) {
@@ -134,99 +240,6 @@ public:
         hash_[h] = c;
         return (int)(c - id_);
     }
-
-    inline int full() 
-    {
-        return count_ == cap_;
-    }
-};
-
-
-class Data
-{
-    int srcPid_;
-    EProtoType ptype_;
-    std::string srcName_;
-    std::string key_;
-    std::shared_ptr<const void> proto_;
-    Data(const Data& that) {}
-    void operator=(const Data& that) {}
-public:
-    Data() :srcPid_(-1), ptype_(EProtoText) {}
-    Data(int pid, const std::string& name, const std::string& key)
-        :srcPid_(pid), srcName_(name), key_(key) {}
-    ~Data() { }
-
-    inline const int& srcPid() const { return srcPid_; }
-    inline const EProtoType& ptype() const { return ptype_; }
-    inline const std::string& srcName() const { return srcName_; }
-    inline const std::string& key() const { return key_; }
-
-    template <class T>
-    inline const T* proto() const 
-    { 
-        return dynamic_cast<const T*>((const T*)proto_.get());
-    }
-
-    inline void setProto(EProtoType ptype, const std::shared_ptr<const void>& proto) { ptype_ = ptype; proto_ = proto; }
-
-};
-
-class Worker;
-typedef void(Worker::* Handle)(const Data&);
-struct Rpc
-{
-    Handle handle_;
-};
-
-class Worker : public OpenThreader
-{
-public:
-    Worker(const std::string& name)
-        :OpenThreader(name)
-    {}
-    virtual ~Worker() {}
-
-    template <class T>
-    bool send(int sid, const std::string& key, const T& t)
-    {
-        printf("[%s]send=>[%s] key:%s\n", name_.c_str(), ThreadName(sid).c_str(), key.c_str());
-        auto data = std::shared_ptr<Data>(new Data(pid(), name_, key));
-        auto proto = std::shared_ptr<const T>(new const T(t));
-        data->setProto(EProtoText, proto);
-        bool ret = OpenThread::Send(sid, data);
-        assert(ret);
-        return ret;
-    }
-    void onText(const Data& data)
-    {
-        printf("[%s]receive<<=[%s] key:%s\n", name_.c_str(), data.srcName().c_str(), data.key().c_str());
-        auto iter = mapKeyFunc_.find(data.key());
-        if (iter != mapKeyFunc_.end())
-        {
-            auto& rpc = iter->second;
-            if (rpc.handle_)
-            {
-                (this->*rpc.handle_)(data); return;
-            }
-        }
-        printf("[%s]no implement key:%s\n", name_.c_str(), data.key().c_str());
-    }
-    virtual void onSocket(const Data& data)
-    {
-    }
-    virtual void onMsg(OpenThreadMsg& msg)
-    {
-        const Data* data = msg.data<Data>();
-        if (data)
-        {
-            if (data->ptype() == EProtoText)
-                onText(*data);
-            else if (data->ptype() == EProtoSocket)
-                onSocket(*data);
-        }
-    }
-    std::map<std::string, Rpc> mapKeyFunc_;
 };
 
 #endif //WORKER_HEADER_H

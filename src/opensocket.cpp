@@ -832,6 +832,10 @@ send_buffer(struct socket_server *ss, struct socket *s, struct socket_lock *l, s
 	if (s->dw_buffer) {
 		// add direct write buffer before high.head
 		struct write_buffer* buf = (struct write_buffer*)MALLOC(SIZEOF_TCPBUFFER);
+		if (!buf)
+		{
+			return -1;
+		}
 		struct send_object so;
 		buf->userobject = send_object_init(ss, &so, (void *)s->dw_buffer, (int)s->dw_size);
 		buf->ptr = (char*)so.buffer+s->dw_offset;
@@ -856,6 +860,10 @@ send_buffer(struct socket_server *ss, struct socket *s, struct socket_lock *l, s
 static struct write_buffer *
 append_sendbuffer_(struct socket_server *ss, struct wb_list *s, struct request_send * request, int size) {
 	struct write_buffer * buf = (struct write_buffer*)MALLOC(size);
+	if (!buf)
+	{
+		return 0;
+	}
 	struct send_object so;
 	buf->userobject = send_object_init(ss, &so, request->buffer, request->sz);
 	buf->ptr = (char*)so.buffer;
@@ -1318,7 +1326,7 @@ gen_udp_address(int protocol, union sockaddr_all *sa, uint8_t * udp_address) {
 
 static int
 forward_message_udp(struct socket_server *ss, struct socket *s, struct socket_lock *l, struct socket_message * result) {
-	union sockaddr_all sa;
+	union sockaddr_all sa = {0};
 	socklen_t slen = sizeof(sa);
 	int n = socket_recvfrom(s->fd, ss->udpbuffer, MAX_UDP_PACKAGE, 0, &sa.s, &slen);
 	if (n<0) {
@@ -1378,7 +1386,7 @@ report_connect(struct socket_server *ss, struct socket *s, struct socket_lock *l
 		if (nomore_sending_data(s)) {
 			sp_write(ss->event_fd, s->fd, s, false);
 		}
-		union sockaddr_all u;
+		union sockaddr_all u = {0};
 		socklen_t slen = sizeof(u);
 		if (getpeername(s->fd, &u.s, &slen) == 0) {
 			void * sin_addr = (u.s.sa_family == AF_INET) ? (void*)&u.v4.sin_addr : (void *)&u.v6.sin6_addr;
@@ -1408,7 +1416,7 @@ getname(union sockaddr_all *u, char *buffer, size_t sz) {
 // return 0 when failed, or -1 when file limit
 static int
 report_accept(struct socket_server *ss, struct socket *s, struct socket_message *result) {
-	union sockaddr_all u;
+	union sockaddr_all u = {0};
 	socklen_t len = sizeof(u);
 	int client_fd = (int)accept(s->fd, &u.s, &len);
 	if (client_fd < 0) {
@@ -1672,7 +1680,7 @@ int socket_server_send(struct socket_server *ss, int id, const void * buffer, in
 	}
 	inc_sending_ref(s, id);
 
-	struct request_package request;
+	struct request_package request = {0};
 	request.u.send.id = id;
 	request.u.send.sz = sz;
 	request.u.send.buffer = (char *)buffer;
@@ -1692,7 +1700,7 @@ socket_server_send_lowpriority(struct socket_server *ss, int id, const void * bu
 
 	inc_sending_ref(s, id);
 
-	struct request_package request;
+	struct request_package request = {0};
 	request.u.send.id = id;
 	request.u.send.sz = sz;
 	request.u.send.buffer = (char *)buffer;
@@ -1799,7 +1807,7 @@ int socket_server_udp(struct socket_server *ss, uintptr_t opaque, const char * a
 		socket_close(fd);
 		return -1;
 	}
-	struct request_package request;
+	struct request_package request = {0};
 	request.u.udp.id = id;
 	request.u.udp.fd = fd;
 	request.u.udp.opaque = opaque;
@@ -1860,7 +1868,7 @@ socket_server_udp_send(struct socket_server *ss, int id, const struct socket_udp
 		// let socket thread try again, udp doesn't care the order
 	}
 
-	struct request_package request;
+	struct request_package request = {0};
 	request.u.send_udp.send.id = id;
 	request.u.send_udp.send.sz = sz;
 	request.u.send_udp.send.buffer = (char *)buffer;
@@ -1901,9 +1909,9 @@ socket_server_udp_connect(struct socket_server *ss, int id, const char * addr, i
 	if ( status != 0 ) {
 		return -1;
 	}
-	struct request_package request;
+	struct request_package request = {0};
 	request.u.set_udp.id = id;
-	int protocol;
+	int protocol = 0;
 
 	if (ai_list->ai_family == AF_INET) {
 		protocol = PROTOCOL_UDP;
@@ -1942,8 +1950,8 @@ socket_server_udp_address(struct socket_server *ss, struct socket_message *msg, 
 
 
 #include "opensocket.h"
-#include <atomic>
-#include <memory>
+#include <time.h>
+#include <map>
 
 #if defined(WIN32) || defined(_WIN32) || defined(WIN64) || defined(_WIN64)
 #ifdef __cplusplus
@@ -1965,7 +1973,7 @@ typedef int pthread_attr_t;
 typedef unsigned(__stdcall* routinefunc)(void*);
 static int pthread_create(pthread_t* thread, const pthread_attr_t* attr, void* (*start_routine1) (void*), void* arg)
 {
-	int _intThreadId;
+	int _intThreadId = 0;
 	routinefunc start_routine = (routinefunc)start_routine1;
 	(*thread).thread_handle = (HANDLE)_beginthreadex(NULL, 0, start_routine, arg, 0, (unsigned int*)&_intThreadId);
 	(*thread).thread_id = _intThreadId;
@@ -2154,30 +2162,28 @@ int OpenSocket::poll()
 	return 1;
 }
 
-int OpenSocket::send(int fd, const std::string& buffer)
+int OpenSocket::send(int fd, const void* buffer, int sz)
 {
-	int size = (int)buffer.size();
-	char* sbuffer = (char*)malloc(size);
+	char* sbuffer = (char*)malloc(sz);
 	if (!sbuffer) return -1;
-	memcpy(sbuffer, buffer.data(), size);
+	memcpy(sbuffer, buffer, sz);
 	struct socket_server* ss = (struct socket_server*)socket_server_;
-	return socket_server_send(ss, fd, sbuffer, size);
+	return socket_server_send(ss, fd, sbuffer, sz);
 }
 
-int OpenSocket::sendLowpriority(int fd, const std::string& buffer)
+int OpenSocket::sendLowpriority(int fd, const void* buffer, int sz)
 {
-	int size = (int)buffer.size();
-	char* sbuffer = (char*)malloc(size);
+	char* sbuffer = (char*)malloc(sz);
 	if (!sbuffer) return -1;
-	memcpy(sbuffer, buffer.data(), size);
+	memcpy(sbuffer, buffer, sz);
 	struct socket_server* ss = (struct socket_server*)socket_server_;
-	return socket_server_send_lowpriority(ss, fd, sbuffer, size);
+	return socket_server_send_lowpriority(ss, fd, sbuffer, sz);
 }
 
 void OpenSocket::nodelay(int fd)
 {
 	struct socket_server* ss = (struct socket_server*)socket_server_;
-	struct request_package request;
+	struct request_package request = {0};
 	request.u.setopt.id = fd;
 	request.u.setopt.what = TCP_NODELAY;
 	request.u.setopt.value = 1;
@@ -2191,7 +2197,7 @@ int OpenSocket::listen(uintptr_t uid, const std::string& host, int port, int bac
 	if (fd < 0) {
 		return -1;
 	}
-	struct request_package request;
+	struct request_package request = {0};
 	int id = reserve_id(ss);
 	if (id < 0) {
 		socket_close(fd);
@@ -2218,7 +2224,7 @@ int OpenSocket::connect(uintptr_t uid, const std::string& host, int port)
 int OpenSocket::bind(uintptr_t uid, int fd)
 {
 	struct socket_server* ss = (struct socket_server*)socket_server_;
-	struct request_package request;
+	struct request_package request = {0};
 	int id = reserve_id(ss);
 	if (id < 0)
 		return -1;
@@ -2232,7 +2238,7 @@ int OpenSocket::bind(uintptr_t uid, int fd)
 void OpenSocket::close(uintptr_t uid, int fd)
 {
 	struct socket_server* ss = (struct socket_server*)socket_server_;
-	struct request_package request;
+	struct request_package request = {0};
 	request.u.close.id = fd;
 	request.u.close.shutdown = 0;
 	request.u.close.opaque = uid;
@@ -2242,7 +2248,7 @@ void OpenSocket::close(uintptr_t uid, int fd)
 void OpenSocket::shutdown(uintptr_t uid, int fd)
 {
 	struct socket_server* ss = (struct socket_server*)socket_server_;
-	struct request_package request;
+	struct request_package request = {0};
 	request.u.close.id = fd;
 	request.u.close.shutdown = 1;
 	request.u.close.opaque = uid;
@@ -2252,7 +2258,7 @@ void OpenSocket::shutdown(uintptr_t uid, int fd)
 void OpenSocket::start(uintptr_t uid, int fd)
 {
 	struct socket_server* ss = (struct socket_server*)socket_server_;
-	struct request_package request;
+	struct request_package request = {0};
 	request.u.start.id = fd;
 	request.u.start.opaque = uid;
 	send_request(ss, &request, 'S', sizeof(request.u.start));
@@ -2270,28 +2276,22 @@ int OpenSocket::udpConnect(int fd, const std::string& addr, int port)
 	return socket_server_udp_connect(ss, fd, addr.c_str(), port);
 }
 
-int OpenSocket::udpSend(int fd, const std::string& address, const std::string& buffer)
+int OpenSocket::udpSend(int fd, const char* address, const void* buffer, int sz)
 {
 	struct socket_server* ss = (struct socket_server*)socket_server_;
-	int size = (int)buffer.size();
+	int size = sz;
 	char* sbuffer = (char*)malloc(size);
-	if (!sbuffer)
-	{
-		return -1;
-	}
-	memcpy(sbuffer, buffer.data(), size);
-	return socket_server_udp_send(ss, fd, (const struct socket_udp_address*)address.data(), sbuffer, size);
+	if (!sbuffer) return -1;
+	memcpy(sbuffer, buffer, sz);
+	return socket_server_udp_send(ss, fd, (const struct socket_udp_address*)address, sbuffer, sz);
 }
 
-int OpenSocket::udpAddress(const std::string& address, std::string& ip, int& port)
+int OpenSocket::udpAddress(const char* address, char* udp_addr, int len)
 {
-	if (address.empty()) {
-		return -1;
-	}
+	if (!address) return -1;
 	int type = address[0];
-	int family = 0;
-	switch (type)
-	{
+	int family;
+	switch (type) {
 	case PROTOCOL_UDP:
 		family = AF_INET;
 		break;
@@ -2301,15 +2301,15 @@ int OpenSocket::udpAddress(const std::string& address, std::string& ip, int& por
 	default:
 		return -1;
 	}
-	memcpy(&port, address.data() + 1, sizeof(uint16_t));
+	uint16_t port = 0;
+	memcpy(&port, address + 1, sizeof(uint16_t));
 	port = ntohs(port);
-	ip.clear();
-	const void* addrptr = address.data() + 3;
+	const void* addrptr = address + 3;
 	char strptr[256] = { 0 };
 	if (!inet_ntop(family, addrptr, strptr, sizeof(strptr))) {
 		return -1;
 	}
-	ip = strptr;
+	snprintf(udp_addr, len, "%s:%d", strptr, port);
 	return 0;
 }
 
@@ -2370,6 +2370,47 @@ static int query_info(struct socket* s, OpenSocket::Info& info)
 	info.wtime_ = s->stat.wtime;
 	info.wbuffer_ = s->wb_size;
 	return 1;
+}
+
+static bool CheckIp(const char* ip)
+{
+	int a = 0, b = 0, c = 0, d = 0;
+	int ret = sscanf(ip, "%d.%d.%d.%d", &a, &b, &c, &d);
+	if (ret == 4 && a >= 0 && a <= 255 && b >= 0 && b <= 255 && c >= 0 && c <= 255 && d >= 0 && d <= 255)
+	{
+		char temp[64] = { 0 };
+		sprintf(temp, "%d.%d.%d.%d", a, b, c, d);
+		if (strcmp(temp, ip) == 0)
+			return true;
+	}
+	return false;
+}
+
+std::string OpenSocket::DomainNameToIp(std::string& domain)
+{
+	if (CheckIp(domain.c_str())) return domain;
+	std::string ip;
+	struct addrinfo* result = NULL;
+	struct addrinfo hints = { 0 };
+	hints.ai_family   = AF_INET;     //ipv4
+	hints.ai_socktype = SOCK_STREAM; 
+	hints.ai_flags    = AI_PASSIVE;  /* For wildcard IP address */
+	//    hints.ai_protocol = 0;         /* Any protocol */
+	hints.ai_protocol = IPPROTO_IP;
+	int retval = getaddrinfo(domain.c_str(), NULL, &hints, &result);
+	if (retval != 0)
+		return ip;
+	
+	struct addrinfo* cur = result;
+	struct sockaddr_in* addr_in = 0;
+	char str[64] = { 0 };
+	do {
+		addr_in = (struct sockaddr_in*)cur->ai_addr;
+		ip = inet_ntop(cur->ai_family, &addr_in->sin_addr, str, sizeof(str));
+		if (!ip.empty()) break;
+	} while ((cur = cur->ai_next));
+	freeaddrinfo(result);
+	return ip;
 }
 
 void OpenSocket::socketInfo(std::vector<Info>& vectInfo)

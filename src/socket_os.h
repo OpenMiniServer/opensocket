@@ -7,25 +7,6 @@
 extern "C" {
 #endif
 
-//////////////poll//////////////
-struct event {
-	void * s;
-	bool read;
-	bool write;
-	bool error;
-	bool eof;
-};
-typedef int poll_fd;
-
-extern bool sp_invalid(poll_fd fd);
-extern poll_fd sp_create();
-extern void sp_release(poll_fd fd);
-extern int sp_add(poll_fd fd, int sock, void *ud);
-extern void sp_del(poll_fd fd, int sock);
-extern void sp_write(poll_fd, int sock, void *ud, bool enable);
-extern int sp_wait(poll_fd, struct event *e, int max);
-extern void sp_nonblocking(int sock);
-// ////////////poll//////////////
 
 // ////////////socket//////////////
 #if defined(WIN32) || defined(_WIN32) || defined(WIN64) || defined(_WIN64)
@@ -101,6 +82,53 @@ inline int socket_stop() { return 0; }
 #endif
 
 // ////////////socket//////////////
+
+
+//////////////poll//////////////
+#if defined(WIN32) || defined(_WIN32) || defined(WIN64) || defined(_WIN64)
+#include "wepoll.h"
+#include <winsock2.h>
+#include <ws2tcpip.h>
+
+struct event {
+	void* s;
+	bool read;
+	bool write;
+	bool error;
+	bool eof;
+};
+typedef HANDLE poll_fd;
+extern bool sp_invalid(poll_fd fd);
+extern poll_fd sp_create();
+extern void sp_release(poll_fd fd);
+extern int sp_add(poll_fd fd, SOCKET sock, void* ud);
+extern void sp_del(poll_fd fd, SOCKET sock);
+extern void sp_write(poll_fd, SOCKET sock, void* ud, bool enable);
+extern int sp_wait(poll_fd, struct event* e, int max);
+extern void sp_nonblocking(SOCKET sock);
+#else
+struct event {
+	void* s;
+	bool read;
+	bool write;
+	bool error;
+	bool eof;
+};
+typedef int poll_fd;
+
+extern bool sp_invalid(poll_fd fd);
+extern poll_fd sp_create();
+extern void sp_release(poll_fd fd);
+extern int sp_add(poll_fd fd, int sock, void* ud);
+extern void sp_del(poll_fd fd, int sock);
+extern void sp_write(poll_fd, int sock, void* ud, bool enable);
+extern int sp_wait(poll_fd, struct event* e, int max);
+extern void sp_nonblocking(int sock);
+#endif
+
+// ////////////poll//////////////
+
+
 
 // ////////////atomic//////////////
 #if defined(WIN32) || defined(_WIN32) || defined(WIN64) || defined(_WIN64)

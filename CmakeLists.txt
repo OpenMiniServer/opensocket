@@ -3,6 +3,7 @@ CMAKE_MINIMUM_REQUIRED(VERSION 3.12.1)
 PROJECT(opensocket)
 
 include_directories(src)
+include_directories(test)
 
 if(CMAKE_SYSTEM_NAME MATCHES "Windows")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /utf-8")
@@ -12,16 +13,20 @@ endif()
 
 
 set(SRC 
+	src/wepoll.h 
+	src/wepoll.c 
 	src/socket_os.h 
 	src/socket_os.c 
 	src/opensocket.h 
 	src/opensocket.cpp
 
 	test/worker.h
-	test/openthread.h
-	test/openthread.cpp
+	test/open/openthread.h
+	test/open/openthread.cpp
 )
 
-add_executable(http ${SRC} test/http.cpp)
-add_executable(tcp ${SRC} test/tcp.cpp)
+add_executable(helloworld ${SRC} test/helloworld.cpp)
+add_executable(httpclient ${SRC} test/httpclient.cpp)
+add_executable(httpserver ${SRC} test/httpserver.cpp)
+add_executable(server ${SRC} test/server.cpp)
 #add_executable(udp ${SRC} test/udp.cpp)

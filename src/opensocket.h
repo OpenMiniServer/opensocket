@@ -57,6 +57,14 @@ public:
 		uint64_t wtime_;
 		int64_t wbuffer_;
 		std::string name_;
+		Info() :id_(0),
+		opaque_(0),
+		read_(0),
+		write_(0),
+		rtime_(0),
+		wtime_(0),
+		wbuffer_(0),
+		type_(EInfoUnknow){}
 		void clear()
 		{
 			id_ = 0;
@@ -74,8 +82,8 @@ public:
 	~OpenSocket();
 
 	bool run(void (*cb)(const Msg*));
-	int send(int fd, const std::string& buffer);
-	int sendLowpriority(int fd, const std::string& buffer);
+	int send(int fd, const void* buffer, int sz);
+	int sendLowpriority(int fd, const void* buffer, int sz);
 	void nodelay(int fd);
 
 	//tcp part
@@ -89,12 +97,13 @@ public:
 	//udp part
 	int udp(uintptr_t uid, const std::string& addr, int port);
 	int udpConnect(int fd, const std::string& addr, int port);
-	int udpSend(int fd, const std::string& address, const std::string& buffer);
-	int udpAddress(const std::string& address, std::string& ip, int& port);
+	int udpSend(int fd, const char* address, const void* buffer, int sz);
+	int udpAddress(const char* address, char* udp_addr, int len);
 
 	void socketInfo(std::vector<Info>& vectInfo);
 
 	static void Sleep(int64_t milliSecond);
+	static std::string DomainNameToIp(std::string& domain);
 private:
 	void forwardMsg(EMsgType type, bool padding, struct socket_message* result);
 	int poll();
