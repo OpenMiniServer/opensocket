@@ -3,9 +3,9 @@ OpenSocket是一个全网最容易实现跨平台的高性能网络并发库。
 
 **Linux和安卓用epoll，Win32用IOCP，iOS和Mac用kqueue，其他系统使用select。**
 
-结合OpenThread使用，可以轻轻构建在任意平台（包括移动平台）构建高性能并发服务器。
+结合OpenThread使用，可以轻轻在任意平台（包括移动平台）构建高性能并发服务器。
 
-OpenSocket全平台设计，无其他依赖，只有4个源文件，让小白都可以轻松玩转C++高性能网络并发开发。
+OpenThread可实现三大多线程设计模式。
 
 **OpenLinyou项目设计跨平台服务器框架，在VS或者XCode上写代码，无需任何改动就可以编译运行在Linux上，甚至是安卓和iOS.**
 OpenLinyou：https://github.com/openlinyou
@@ -18,6 +18,7 @@ Linux和安卓使用epoll，Windows使用IOCP(wepoll)，iOS和Mac使用kqueue，
 ## 编译和执行
 请安装cmake工具，用cmake可以构建出VS或者XCode工程，就可以在vs或者xcode上编译运行。
 源代码：https://github.com/openlinyou/opensocket
+https://gitee.com/linyouhappy/opensocket
 ```
 #克隆项目
 git clone https://github.com/openlinyou/opensocket
@@ -49,9 +50,13 @@ OpenSocket的技术特点：
 2. Linux和安卓使用epoll，Windows使用IOCP(wepoll)，iOS和Mac使用kqueue，其他系统使用select。
 3. 支持IPv6，小巧迷你，配合OpenThread的多线程三大设计模式，轻轻实现高性能网络。
 
+## 1.HelloWorld
+使用OpenThread创建3条线程：listen，accept和client。
 
-## 1.Helloworld
-使用OpenThread可实现多线程三大模式：Await模式, Factory模式和Actor模式。使用Actor模式设计此demo。
+1. 线程listen专门负责监听，把监听到新客户端连接，发送给accept线程。
+2. 线程accept可以有多个，收到listen线程发送过来的新socket事件，打开socket连接，与客户端通信。
+3. 线程client表示客户端，client的socket向 listen请求连接，listen把请求连接发给其中一个accept线程，accept线程接到连接后，与客户端通信。
+
 ```C++
 #include <assert.h>
 #include <time.h>
@@ -63,8 +68,11 @@ using namespace open;
 const std::string TestServerIp_ = "0.0.0.0";
 const std::string TestClientIp_ = "127.0.0.1";
 const int TestServerPort_ = 8888;
+
+//全局的OpenSocket对象。
 OpenSocket openSocket_;
 
+//线程之间交换数据结构
 struct ProtoBuffer
 {
     bool isSocket_;
@@ -75,6 +83,7 @@ struct ProtoBuffer
         isSocket_(0), acceptFd_(0) {}
 };
 
+//OpenSocket线程，不允许有业务处理，消息需要立刻派发到其他线程
 static void SocketFunc(const OpenSocketMsg* msg)
 {
     if (!msg) return;
@@ -85,6 +94,7 @@ static void SocketFunc(const OpenSocketMsg* msg)
     auto proto = std::shared_ptr<ProtoBuffer>(new ProtoBuffer);
     proto->isSocket_ = true;
     proto->data_     = std::shared_ptr<OpenSocketMsg>((OpenSocketMsg*)msg);
+    //把proto发到 msg->uid_指定的线程。
     bool ret = OpenThread::Send((int)msg->uid_, proto);
     if (!ret)
     {
@@ -92,31 +102,40 @@ static void SocketFunc(const OpenSocketMsg* msg)
     }
 }
 
-// Listen
+// 监听网络连接的线程
 static int listen_fd_ = 0;
 void ListenThread(OpenThreadMsg& msg)
 {
+    //线程id
     int pid = msg.pid();
+    //线程名称
     auto& pname = msg.name();
     assert(pname == "listen");
+    //线程启动消息
     if (msg.state_ == OpenThread::START)
     {
+        //等待accept线程启动完，才继续执行
         while (OpenThread::ThreadId("accept") < 0) OpenThread::Sleep(100);
+        //监听IP和端口，内部会执行bind操作。
         listen_fd_ = openSocket_.listen((uintptr_t)pid, TestServerIp_, TestServerPort_, 64);
         if (listen_fd_ < 0)
         {
             printf("Listen::START faild listen_fd_ = %d\n", listen_fd_);
             assert(false);
         }
+        //把listen_fd加入到poll监听事件，并绑定线程pid，该socket任何事件都会发到该线程（listen线程）。
         openSocket_.start((uintptr_t)pid, listen_fd_);
     }
+    //其他线程发过来的消息
     else if (msg.state_ == OpenThread::RUN)
     {
         const ProtoBuffer* proto = msg.data<ProtoBuffer>();
         if (!proto || !proto->isSocket_ || !proto->data_) return;
+        //openSocket_.start 开启poll监听socket事件，并指定线程id。故此处会收到新客户端socket连接的消息
         auto& socketMsg = proto->data_;
         switch (socketMsg->type_)
         {
+        //监听客户端连接事件，把事件发给accept线程。
         case OpenSocket::ESocketAccept:
         {
             printf("Listen::RUN [%s]ESocketAccept: new client. acceptFd:%d, client:%s\n", pname.c_str(), socketMsg->ud_, socketMsg->info());
@@ -124,6 +143,7 @@ void ListenThread(OpenThreadMsg& msg)
             proto->addr_     = socketMsg->info();
             proto->isSocket_ = false;
             proto->acceptFd_ = socketMsg->ud_;
+            //把客户端的fd和ip发给accept线程。
             bool ret = OpenThread::Send("accept", proto);
             assert(ret);
         }
@@ -140,21 +160,24 @@ void ListenThread(OpenThreadMsg& msg)
         case OpenSocket::ESocketOpen:
             printf("Listen::RUN [%s]ESocketOpen:linten open, listenFd:%d\n", pname.c_str(), socketMsg->fd_);
             break;
-        case OpenSocket::ESocketUdp:
+            //因为listen线程只有listen，故不会收到socket数据。
         case OpenSocket::ESocketData:
+        case OpenSocket::ESocketUdp:
             assert(false);
             break;
         default:
             break;
         }
     }
+    //线程退出消息
     else if (msg.state_ == OpenThread::STOP)
     {
+        //线程退出的时候，关闭listen监听socket
         openSocket_.close(pid, listen_fd_);
     }
 }
 
-// Accept
+// Accept线程，接收到新客户端连接，开启socket通信。
 void AcceptThread(OpenThreadMsg& msg)
 {
     int pid     = msg.pid();
@@ -167,22 +190,30 @@ void AcceptThread(OpenThreadMsg& msg)
     {
         const ProtoBuffer* proto = msg.data<ProtoBuffer>();
         if (!proto) return;
+        //会收到两种消息，一种是listen线程发过来的消息，另一种是OpenSocket发过来的消息
         if (!proto->isSocket_)
         {
+            //listen线程发过来的消息
             printf("Accept::RUN  [%s]open accept client:%s\n", pname.c_str(), proto->addr_.c_str());
+            //拿到客户端的fd，加入到poll监听，并绑定pid指定的线程ID（即Accept线程）。
+            //poll监听到任何事件都发到这个线程。
             openSocket_.start(pid, proto->acceptFd_);
         }
         else
         {
+            //OpenSocket发过来的消息
             if (!proto->data_) return;
             auto& socketMsg = proto->data_;
             switch (socketMsg->type_)
             {
+            //客户端发过来的socket数据流
             case OpenSocket::ESocketData:
             {
                 //recevie from client
                 {
+                    //本次接收到socket的数据大小
                     auto size = socketMsg->size();
+                    //本次接收到socket的数据
                     auto data = socketMsg->data();
                     assert(size >= 4);
                     int len = *(int*)data;
@@ -190,18 +221,20 @@ void AcceptThread(OpenThreadMsg& msg)
                     buffer.append(data + 4, len);
                     assert(buffer == "Waiting for you!");
                 }
-                
+                //接到客户端socket消息后，立刻给客户端发消息。
                 //response to client
                 {
                     char buffer[256] = { 0 };
                     std::string tmp = "Of Course,I Still Love You!";
                     *(int*)buffer = (int)tmp.size();
                     memcpy(buffer + 4, tmp.data(), tmp.size());
+                    //给客户端发消息，需要指定该客户端的fd
                     openSocket_.send(socketMsg->fd_, buffer, (int)(4 + tmp.size()));
                 }
             }
                 break;
             case OpenSocket::ESocketOpen:
+                //拿到客户端的fd，加入到poll监听，成功就会收到该消息。
                 printf("Accept::RUN [%s]ESocketClose:accept client open, acceptFd:%d\n", pname.c_str(), socketMsg->fd_);
                 break;
             case OpenSocket::ESocketClose:
@@ -213,6 +246,7 @@ void AcceptThread(OpenThreadMsg& msg)
             case OpenSocket::ESocketWarning:
                 printf("Accept::RUN  [%s]ESocketWarning:%s\n", pname.c_str(), socketMsg->info());
                 break;
+                //因为accept线程没有绑定listen的socket，故不会收到该消息。
             case OpenSocket::ESocketAccept:
             case OpenSocket::ESocketUdp:
                 assert(false);
@@ -223,20 +257,26 @@ void AcceptThread(OpenThreadMsg& msg)
         }
     }
 }
-//client
+
+//客户端线程，模拟一个客户端。可以拆开，用另一个进程实现，模拟客户端访问服务器。
 static int client_fd_ = 0;
 void ClientThread(OpenThreadMsg& msg)
 {
+    //客户端线程id
     int pid = msg.pid();
+    //客户端线程名称
     auto& pname = msg.name();
     assert(pname == "client");
     if (msg.state_ == OpenThread::START)
     {
+        //因为在同一个进程，所以，需要等listen等线程启动完毕，才能连接。
         while (OpenThread::ThreadId("accept") < 0) OpenThread::Sleep(100);
+        //连接服务器ip和端口，并把fd与客户端线程绑定，fd的任何信息都会发到客户端线程。
         client_fd_ = openSocket_.connect(pid, TestClientIp_, TestServerPort_);
     }
     else if (msg.state_ == OpenThread::RUN)
     {
+        //作为客户端线程，只有OpenSocket消息。
         const ProtoBuffer* proto = msg.data<ProtoBuffer>();
         if (!proto || !proto->isSocket_ || !proto->data_) return;
         auto& socketMsg = proto->data_;
@@ -244,7 +284,7 @@ void ClientThread(OpenThreadMsg& msg)
         {
         case OpenSocket::ESocketData:
         {
-            //recevie from client
+            //接收到服务器的socket数据
             auto size = socketMsg->size();
             auto data = socketMsg->data();
             assert(size >= 4);
@@ -258,12 +298,14 @@ void ClientThread(OpenThreadMsg& msg)
         break;
         case OpenSocket::ESocketOpen:
         {
+            //如果与服务器连接成果，就会收到此消息
             assert(client_fd_ == socketMsg->fd_);
             printf("Client::RUN [%s]ESocketClose:Client client open, clientFd:%d\n", pname.c_str(), socketMsg->fd_);
             char buffer[256] = {0};
             std::string tmp = "Waiting for you!";
             *(int*)buffer = (int)tmp.size();
             memcpy(buffer + 4, tmp.data(), tmp.size());
+            //与服务器连接成功，就向服务器发消息。发消息只需要指定fd。
             openSocket_.send(client_fd_, buffer, (int)(4 + tmp.size()));
         }
             break;
@@ -287,12 +329,13 @@ void ClientThread(OpenThreadMsg& msg)
 }
 int main()
 {
-    // create and start thread
+    // 创建三个线程。listen线程、accept线程和client线程。
     OpenThread::Create("listen", ListenThread);
     OpenThread::Create("accept", AcceptThread);
     OpenThread::Create("client", ClientThread);
-    // run OpenSocket
+    // 启动OpenSocket。一个进程只需要一个OpenSocket。
     openSocket_.run(SocketFunc);
+    //等待全部子线程结束，否则一直阻塞。
     OpenThread::ThreadJoinAll();
     printf("Pause\n");
     return getchar();
@@ -301,7 +344,7 @@ int main()
 ```
 
 ## 2.HttpClient
-使用OpenThread的Worker模式设计高并发HttpClient。
+使用OpenThread的Worker模式设计高并发高性能HttpClient。
 ```C++
 #include <assert.h>
 #include <time.h>
@@ -311,19 +354,22 @@ int main()
 #include "opensocket.h"
 using namespace open;
 
+//请求http对象，包含返回对象。
 class HttpRequest
 {
     std::string url_;
 public:
-    std::map<std::string, std::string> headers_;
     int port_;
     std::string host_;
     std::string ip_;
     std::string path_;
     std::string method_;
     std::string body_;
+        //http请求头
+    std::map<std::string, std::string> headers_;
     HttpRequest() :port_(80) {}
     std::string& operator[](const std::string& key) { return headers_[key]; }
+    //指定url，并进行解析和域名解析
     void setUrl(const std::string& url)
     {
         if (url.empty()) return;
@@ -363,9 +409,11 @@ public:
         {
             ip_ = ptr;
         }
+        //域名解析，把域名转ip。可以缓存，提供效率
         ip_ = OpenSocket::DomainNameToIp(ip_);
     }
     inline void operator=(const std::string& url) { setUrl(url); }
+    //http返回对象
     struct HttpResponse
     {
         int code_;
@@ -376,6 +424,7 @@ public:
         std::map<std::string, std::string> headers_;
         std::string& operator[](const std::string& key) { return headers_[key]; }
         HttpResponse():code_(0), clen_(0) {}
+        //解析返回http消息头
         void parseHeader()
         {
             if (!headers_.empty() || head_.size() < 12) return;
@@ -432,44 +481,57 @@ public:
         }
     };
     HttpResponse response_;
+    //阻塞当前线程，等待http消息返回，才继续执行。
     OpenSync openSync_;
 };
+
+//OpenThread的线程之间通信数据结构，用isSocket_区别是socket消息还是http请求消息
 struct BaseProto
 {
     bool isSocket_;
 };
+//携带OpenSocket消息的数据结构，isSocket_=true
 struct SocketProto : public BaseProto
 {
     std::shared_ptr<OpenSocketMsg> data_;
 };
+//携带http请求消息的数据结构，isSocket_=false
 struct TaskProto : public BaseProto
 {
     int fd_;
     OpenSync openSync_;
     std::shared_ptr<HttpRequest> request_;
 };
+
+//应用程序单利，封装OpenSocket，一个进程只有一个对象。
 class App
 {
+    //OpenSocketMsg需要手动释放，放到智能指针，由智能指针释放
     static void SocketFunc(const OpenSocketMsg* msg)
     {
         if (!msg) return;
+        //msg需要手动delete，把它托管给智能指针
+        auto proto = std::shared_ptr<SocketProto>(new SocketProto);
+        //OpenThread的线程id >= 0，所以只处理非负数的条件
         if (msg->uid_ >= 0)
         {
-            auto proto = std::shared_ptr<SocketProto>(new SocketProto);
             proto->isSocket_ = true;
             proto->data_ = std::shared_ptr<OpenSocketMsg>((OpenSocketMsg*)msg);
+            //msg->uid_是绑定的线程id，向该线程派发socket消息
             if (!OpenThread::Send((int)msg->uid_, proto))
                 printf("SocketFunc dispatch faild pid = %lld\n", msg->uid_);
         }
-        else delete msg;
     }
 public:
     static App Instance_;
+    //OpenSocket对象，可以设计成单利
     OpenSocket openSocket_;
+    //App构造的时候，启动OpenSocket。
     App() {  openSocket_.run(App::SocketFunc); }
 };
 App App::Instance_;
 
+//HttpClient线程类，Factory管理一组线程。
 class HttpClient : public OpenThreader
 {
     //Factory
@@ -484,6 +546,7 @@ class HttpClient : public OpenThreader
                 new HttpClient("HttpClient3"),
                 new HttpClient("HttpClient4"),
                 }) {}
+            //采用随机方式，提供一个线程
         HttpClient* getWorker()
         {
             if (vectWorker_.empty()) return 0;
@@ -492,7 +555,7 @@ class HttpClient : public OpenThreader
     };
     static Factory Instance_;
 
-    // HttpClient
+    // name是线程名，必须制定。在Linux上，top -Hp可以看到这个线程名。
     HttpClient(const std::string& name)
         :OpenThreader(name)
     {
@@ -500,20 +563,26 @@ class HttpClient : public OpenThreader
     }
     ~HttpClient()
     {
+        //销毁之前，尽可能唤醒请求线程，防止请求线程阻塞
         for (auto iter = mapFdToTask_.begin(); iter != mapFdToTask_.end(); iter++)
             iter->second.openSync_.wakeup();
     }
+    //处理请求http线程发过来的消息
     void onHttp(TaskProto& proto)
     {
         auto& request = proto.request_;
+        //连接Http服务器，并把fd与当前线程绑定。该socket的全部消息，都发到此线程
         proto.fd_ = App::Instance_.openSocket_.connect(pid(), request->ip_, request->port_);
         request->response_.code_ = -1;
         request->response_.head_.clear();
         request->response_.body_.clear();
+        //fd与任务绑定到任务列表
         mapFdToTask_[proto.fd_] = proto;
     }
+    //与http服务器连接成功以后，发送http请求报文
     void onSend(const std::shared_ptr<OpenSocketMsg>& data)
     {
+        //需要判断fd绑定的task是否存在，否则关闭与Http服务器的连接
         auto iter = mapFdToTask_.find(data->fd_);
         if (iter == mapFdToTask_.end())
         {
@@ -538,10 +607,13 @@ class HttpClient : public OpenThreader
         {
             buffer.append("\r\n");
         }
+        //制作好Http请求报文，发送给服务器。
         App::Instance_.openSocket_.send(task.fd_, buffer.data(), (int)buffer.size());
     }
+    //处理Http服务器发送过了socket数据流，拼成完整的Http返回报文
     void onRead(const std::shared_ptr<OpenSocketMsg>& data)
     {
+        //Http任务列表没有绑定fd的任务，就对该fd关闭。
         auto iter = mapFdToTask_.find(data->fd_);
         if (iter == mapFdToTask_.end())
         {
@@ -550,6 +622,7 @@ class HttpClient : public OpenThreader
         }
         auto& task = iter->second;
         auto& response = task.request_->response_;
+        //处理返回http头
         if (response.code_ == -1)
         {
             response.head_.append(data->data(), data->size());
@@ -560,6 +633,7 @@ class HttpClient : public OpenThreader
             response.head_.resize(ptr - response.head_.data() + 2);
             response.parseHeader();
         }
+        //处理返回的http的body
         else
         {
             response.body_.append(data->data(), data->size());
@@ -580,6 +654,7 @@ class HttpClient : public OpenThreader
             }
         }
     }
+    //与Http服务器关闭的消息，唤醒请求线程，并对fd绑定的任务，移出任务列表
     void onClose(const std::shared_ptr<OpenSocketMsg>& data)
     {
         auto iter = mapFdToTask_.find(data->fd_);
@@ -589,6 +664,7 @@ class HttpClient : public OpenThreader
             mapFdToTask_.erase(iter);
         }
     }
+    //接收绑定此线程的socket消息。
     void onSocket(const SocketProto& proto)
     {
         const auto& msg = proto.data_;
@@ -618,6 +694,7 @@ class HttpClient : public OpenThreader
             break;
         }
     }
+    //处理static bool Http(std::shared_ptr<HttpRequest>& request)发过来的消息
     virtual void onMsg(OpenThreadMsg& msg)
     {
         const BaseProto* data = msg.data<BaseProto>();
@@ -642,26 +719,31 @@ public:
             assert(false);
             return false;
         }
-        request->response_.code_ = -1;
+        //类型线程池中，选择一个。
         auto worker = Instance_.getWorker();
         if (!worker)  return false;
         auto proto = std::shared_ptr<TaskProto>(new TaskProto);
         proto->request_ = request;
         proto->isSocket_ = false;
+        //接收消息地方：virtual void onMsg(OpenThreadMsg& msg)
         bool ret = OpenThread::Send(worker->pid(), proto);
         assert(ret);
+        //阻塞，等待http请求完成唤醒
         proto->openSync_.await();
         return ret;
     }
 };
 HttpClient::Factory HttpClient::Instance_;
+
+
 int main()
 {
     auto request = std::shared_ptr<HttpRequest>(new HttpRequest);
-    //Stock Market Latest Dragon and Tiger List
+    //请求交易所的最新龙虎数据
     request->setUrl("http://reportdocs.static.szse.cn/files/text/jy/jy230308.txt");
     request->method_ = "GET";
 
+    //自定义Http请求头
     (*request)["Host"] = "reportdocs.static.szse.cn";
     (*request)["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7";
     (*request)["Accept-Encoding"] = "gzip,deflate";
@@ -670,7 +752,9 @@ int main()
     (*request)["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36(KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36";
     (*request)["Upgrade-Insecure-Requests"] = "1";
 
+    //发送http请求
     HttpClient::Http(request);
+    //返回http请求
     auto& response = request->response_;
     printf("code:%d, header:%s\n", response.code_, response.head_.c_str());
     return getchar();
@@ -1485,6 +1569,3 @@ int main()
     return getchar();
 }
 ```
-
-## 5.Socket的UDP通信
-暂时不提供UDP的demo，如果有人提需求，才考虑提供。
