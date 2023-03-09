@@ -1,6 +1,8 @@
 # OpenSocket
 OpenSocket is a super simple and easy-to-use cross-platform high-performance network concurrency library.
 
+**Linux and Android use epoll, iOS and Mac use kqueue, Windows use IOCP(wepoll).other systems use select.**
+
 Combined with OpenThread, you can easily build high-performance concurrent servers on any platform (including mobile platforms).
 
 OpenSocket is designed for all platforms with no other dependencies and only 4 source files, making it easy for beginners to play with C++ high-performance network concurrency development.

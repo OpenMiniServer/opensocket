@@ -1,6 +1,7 @@
 # OpenSocket
 OpenSocket是一个全网最容易实现跨平台的高性能网络并发库。
-Linux和安卓用epoll，Win32用IOCP，iOS和Mac用kqueue，其他系统使用select。
+
+**Linux和安卓用epoll，Win32用IOCP，iOS和Mac用kqueue，其他系统使用select。**
 
 结合OpenThread使用，可以轻轻构建在任意平台（包括移动平台）构建高性能并发服务器。
 
