@@ -61,6 +61,7 @@ OpenSocket的技术特点：
 #include <assert.h>
 #include <time.h>
 #include <math.h>
+#include <string.h>
 #include "opensocket.h"
 #include "open/openthread.h"
 using namespace open;
@@ -364,6 +365,7 @@ fd加入到poll成功以后，该socket的任何消息可以通过线程Id，发
 #include <time.h>
 #include <math.h>
 #include <map>
+#include <string.h>
 #include "open/openthread.h"
 #include "opensocket.h"
 using namespace open;
@@ -789,6 +791,7 @@ OpenSocket是对poll的封装，一个进程只需要创建一个OpenSocket对�
 #include <map>
 #include <set>
 #include <memory>
+#include <string.h>
 #include "opensocket.h"
 #include "open/openthread.h"
 using namespace open;
@@ -1218,6 +1221,7 @@ Client是客户端集群，使用它可以对服务器进行压力测试。
 #include <map>
 #include <set>
 #include <memory>
+#include <string.h>
 #include "opensocket.h"
 #include "open/openthread.h"
 using namespace open;
@@ -1236,23 +1240,26 @@ struct SocketProto : public OpenThreadProto
 
 class ProtoBuffer : public OpenThreadProto
 {
-    void* data_;
+    std::shared_ptr<void> data_;
 public:
     int msgId_;
-    ProtoBuffer() : OpenThreadProto(), msgId_(0) , data_(0) {}
-    virtual ~ProtoBuffer() { if (data_) delete data_; }
+    ProtoBuffer()
+        : OpenThreadProto()
+        , msgId_(0)
+        , data_(0) {}
+    virtual ~ProtoBuffer() {}
     template <class T>
     inline T& data()
     {
         T* t = 0;
         if (data_)
         {
-            t = dynamic_cast<T*>((T*)data_);
-            if (data_ == t) return *t;
-            delete data_;
+            t = dynamic_cast<T*>((T*)data_.get());
+            if (data_.get() == t) return *t;
+            data_.reset();
         }
         t = new T;
-        data_ = t;
+        data_ = std::shared_ptr<T>(t);
         return *t;
     }
     template <class T>
@@ -1260,14 +1267,14 @@ public:
     {
         if (data_)
         {
-            T* t = dynamic_cast<T*>((T*)data_);
-            if (data_ == t) return *t;
+            T* t = dynamic_cast<T*>((T*)data_.get());
+            if (data_.get() == t) return *t;
         }
         assert(false);
         static T t;
         return t;
     }
-    static inline int ProtoType() { return 2; }
+    static inline int ProtoType() { return (int)(uintptr_t) & (ProtoType); }
     virtual inline int protoType() const { return ProtoBuffer::ProtoType(); }
 };
 

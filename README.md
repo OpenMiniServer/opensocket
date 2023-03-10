@@ -56,6 +56,7 @@ Using OpenThread can achieve three major modes of multithreading: Await mode, Fa
 #include <assert.h>
 #include <time.h>
 #include <math.h>
+#include <string.h>
 #include "opensocket.h"
 #include "open/openthread.h"
 using namespace open;
@@ -307,6 +308,7 @@ Designing a high-concurrency HttpClient using OpenThread’s Worker mode.
 #include <time.h>
 #include <math.h>
 #include <map>
+#include <string.h>
 #include "open/openthread.h"
 #include "opensocket.h"
 using namespace open;
@@ -710,6 +712,7 @@ OpenSocket is a wrapper for poll; only one OpenSocket object needs to be created
 #include <map>
 #include <set>
 #include <memory>
+#include <string.h>
 #include "opensocket.h"
 #include "open/openthread.h"
 using namespace open;
@@ -1139,6 +1142,7 @@ Client is a client cluster that can be used to perform stress tests on the serve
 #include <map>
 #include <set>
 #include <memory>
+#include <string.h>
 #include "opensocket.h"
 #include "open/openthread.h"
 using namespace open;
@@ -1157,23 +1161,26 @@ struct SocketProto : public OpenThreadProto
 
 class ProtoBuffer : public OpenThreadProto
 {
-    void* data_;
+    std::shared_ptr<void> data_;
 public:
     int msgId_;
-    ProtoBuffer() : OpenThreadProto(), msgId_(0) , data_(0) {}
-    virtual ~ProtoBuffer() { if (data_) delete data_; }
+    ProtoBuffer()
+        : OpenThreadProto()
+        , msgId_(0)
+        , data_(0) {}
+    virtual ~ProtoBuffer() {}
     template <class T>
     inline T& data()
     {
         T* t = 0;
         if (data_)
         {
-            t = dynamic_cast<T*>((T*)data_);
-            if (data_ == t) return *t;
-            delete data_;
+            t = dynamic_cast<T*>((T*)data_.get());
+            if (data_.get() == t) return *t;
+            data_.reset();
         }
         t = new T;
-        data_ = t;
+        data_ = std::shared_ptr<T>(t);
         return *t;
     }
     template <class T>
@@ -1181,14 +1188,14 @@ public:
     {
         if (data_)
         {
-            T* t = dynamic_cast<T*>((T*)data_);
-            if (data_ == t) return *t;
+            T* t = dynamic_cast<T*>((T*)data_.get());
+            if (data_.get() == t) return *t;
         }
         assert(false);
         static T t;
         return t;
     }
-    static inline int ProtoType() { return 2; }
+    static inline int ProtoType() { return (int)(uintptr_t) & (ProtoType); }
     virtual inline int protoType() const { return ProtoBuffer::ProtoType(); }
 };
 
