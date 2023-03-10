@@ -2,6 +2,7 @@
 #include <time.h>
 #include <math.h>
 #include <map>
+#include <string.h>
 #include "open/openthread.h"
 #include "opensocket.h"
 using namespace open;
@@ -72,7 +73,7 @@ class App
             proto->srcName_ = "OpenSocket";
             proto->data_ = std::shared_ptr<OpenSocketMsg>((OpenSocketMsg*)msg);
             if (!OpenThread::Send((int)msg->uid_, proto))
-                printf("SocketFunc dispatch faild pid = %lld\n", msg->uid_);
+                printf("SocketFunc dispatch faild pid = %d\n", (int)msg->uid_);
         }
         else delete msg;
     }

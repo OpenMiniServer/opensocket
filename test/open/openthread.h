@@ -395,7 +395,6 @@ protected:
     }
     virtual void onMsg(OpenThreadMsg& msg);
     
-    //std::unordered_map
     std::map<int, OpenThreadHandle> mapHandle_;
 };
 

@@ -2,186 +2,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-//////////////socket//////////////
-#if defined(WIN32) || defined(_WIN32) || defined(WIN64) || defined(_WIN64)
-#pragma comment(lib, "ws2_32.lib")
-
-int write(fd, buffer, sz) { return 0; }
-int read(fd, buffer, sz) { return 0; }
-int close(fd, buffer, sz) { return 0; }
-
-int socket_write(int fd, const void* buffer, size_t sz)
-{
-    int ret = socket_send(fd, (const char*)buffer, (int)sz, 0);
-    if (ret == SOCKET_ERROR && WSAGetLastError() == WSAENOTSOCK) 
-        return write(fd, buffer, sz);
-    return ret;
-}
-
-int socket_read(int fd, void* buffer, size_t sz)
-{
-    int ret = socket_recv(fd, (char*)buffer, (int)sz, 0);
-    if (ret == SOCKET_ERROR && WSAGetLastError() == WSAENOTSOCK) 
-        return read(fd, buffer, (int)sz);
-    return ret;
-}
-
-int socket_close(int fd)
-{
-    int ret = closesocket(fd);
-    if (ret == SOCKET_ERROR && WSAGetLastError() == WSAENOTSOCK) 
-        return close(fd);
-    return ret;
-}
-
-int socket_connect(SOCKET s, const struct sockaddr* name, int namelen)
-{
-    int ret = connect(s, name, namelen);
-    if (ret == SOCKET_ERROR)  {
-        errno = WSAGetLastError();
-        if (errno == WSAEWOULDBLOCK)
-            errno = EINPROGRESS;
-    }
-    return ret;
-}
-
-int socket_send(SOCKET s, const char* buffer, int sz, int flag) 
-{
-    int ret = send(s, buffer, sz, flag);
-    if (ret == SOCKET_ERROR)  {
-        errno = WSAGetLastError();
-        if (errno == WSAEWOULDBLOCK)
-            errno = EAGAIN;
-    }
-    return ret;
-}
-
-int socket_recv(SOCKET s, char* buffer, int sz, int flag)
-{
-    int ret = recv(s, buffer, sz, flag);
-    if (ret == SOCKET_ERROR)  {
-        errno = WSAGetLastError();
-        if (errno == WSAEWOULDBLOCK)
-            errno = EAGAIN;
-    }
-    return ret;
-}
-
-int socket_getsockopt(SOCKET s, int level, int optname, void* optval, int* optlen)
-{
-    return getsockopt(s, level, optname, (char*)optval, optlen);
-}
-
-int socket_setsockopt(SOCKET s, int level, int optname, const void* optval, int optlen)
-{
-    return setsockopt(s, level, optname, (char*)optval, optlen);
-}
-
-int socket_recvfrom(SOCKET s, void* buf, int len, int flags, struct sockaddr* from, int* fromlen)
-{
-    int ret = recvfrom(s, (char*)buf, len, flags, from, fromlen);
-    if (ret == SOCKET_ERROR)  {
-        errno = WSAGetLastError();
-        if (errno == WSAEWOULDBLOCK)
-            errno = EAGAIN;
-        if (errno == WSAECONNRESET)
-            errno = EAGAIN;
-    }
-    return ret;
-}
-
-int socket_start()
-{
-    WORD wVersionRq = MAKEWORD(2, 0);
-    WSADATA wsaData;
-    int err = WSAStartup(wVersionRq, &wsaData);
-    if (err != 0)
-    {
-        printf("Error initializing ws2_32.dll");
-        assert(0);
-        return -1;
-    }
-    if ((LOBYTE(wsaData.wVersion) != 2) || (HIBYTE(wsaData.wVersion) != 0))
-    {
-        WSACleanup();
-        printf("Error initializing ws2_32.dll");
-        assert(0);
-        return -1;
-    }
-    return 0;
-}
-
-int socket_stop()
-{
-    WSACleanup();
-    return 0;
-}
-
-int pipe(int fds[2]) 
-{
-    int err = socket_start();
-    if (err != 0)
-    {
-        return err;
-    }
-    struct sockaddr_in name;
-    int namelen = sizeof(name);
-    SOCKET server = INVALID_SOCKET;
-    SOCKET client1 = INVALID_SOCKET;
-    SOCKET client2 = INVALID_SOCKET;
-
-    memset(&name, 0, sizeof(name));
-    name.sin_family = AF_INET;
-    name.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    name.sin_port = 0;
-
-    server = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (server == INVALID_SOCKET)
-        goto failed;
-
-    int yes=1;
-    if (setsockopt(server,SOL_SOCKET,SO_REUSEADDR,(char*)&yes,sizeof(yes)) == SOCKET_ERROR)
-       goto failed;          
-
-    if (bind(server, (struct sockaddr*)&name, namelen) == SOCKET_ERROR) 
-        goto failed;
-
-    if (listen(server, 5) == SOCKET_ERROR)
-        goto failed;
-
-    if(getsockname(server, (struct sockaddr*)&name, &namelen) == SOCKET_ERROR)
-        goto failed;
-
-    client1 = socket(AF_INET, SOCK_STREAM, 0);
-    if (client1 == INVALID_SOCKET)
-        goto failed;
-
-    if (connect(client1, (struct sockaddr*)&name, namelen) == SOCKET_ERROR)
-        goto failed;
-
-    client2 = accept(server, (struct sockaddr*)&name, &namelen);
-    if (client2 == INVALID_SOCKET)
-        goto failed;
-
-    // closesocket(server);
-    fds[0] = (int)client1;
-    fds[1] = (int)client2;
-    return 0;
-
-failed:
-    if (server != INVALID_SOCKET)
-        closesocket(server);
-
-    if (client1 != INVALID_SOCKET)
-        closesocket(client1);
-
-    if (client2 != INVALID_SOCKET)
-        closesocket(client2);
-    return -1;
-}
-
-//////////////socket//////////////
-
 
 //////////////poll//////////////
 
@@ -255,6 +75,7 @@ void sp_nonblocking(int fd) {
 
 
 #elif defined(WIN32) || defined(_WIN32) || defined(WIN64) || defined(_WIN64)
+
 #define _CRT_SECURE_NO_WARNINGS
 #include <sys/types.h>
 #include <fcntl.h>
@@ -601,5 +422,196 @@ void sp_nonblocking(int fd) {
 
 #endif
 //////////////poll//////////////
+
+
+
+
+
+
+
+
+
+
+//////////////socket//////////////
+#if defined(WIN32) || defined(_WIN32) || defined(WIN64) || defined(_WIN64)
+#pragma comment(lib, "ws2_32.lib")
+
+int write(fd, buffer, sz) { return 0; }
+int read(fd, buffer, sz) { return 0; }
+int close(fd, buffer, sz) { return 0; }
+
+int socket_write(int fd, const void* buffer, size_t sz)
+{
+    int ret = socket_send(fd, (const char*)buffer, (int)sz, 0);
+    if (ret == SOCKET_ERROR && WSAGetLastError() == WSAENOTSOCK) 
+        return write(fd, buffer, sz);
+    return ret;
+}
+
+int socket_read(int fd, void* buffer, size_t sz)
+{
+    int ret = socket_recv(fd, (char*)buffer, (int)sz, 0);
+    if (ret == SOCKET_ERROR && WSAGetLastError() == WSAENOTSOCK) 
+        return read(fd, buffer, (int)sz);
+    return ret;
+}
+
+int socket_close(int fd)
+{
+    int ret = closesocket(fd);
+    if (ret == SOCKET_ERROR && WSAGetLastError() == WSAENOTSOCK) 
+        return close(fd);
+    return ret;
+}
+
+int socket_connect(SOCKET s, const struct sockaddr* name, int namelen)
+{
+    int ret = connect(s, name, namelen);
+    if (ret == SOCKET_ERROR)  {
+        errno = WSAGetLastError();
+        if (errno == WSAEWOULDBLOCK)
+            errno = EINPROGRESS;
+    }
+    return ret;
+}
+
+int socket_send(SOCKET s, const char* buffer, int sz, int flag) 
+{
+    int ret = send(s, buffer, sz, flag);
+    if (ret == SOCKET_ERROR)  {
+        errno = WSAGetLastError();
+        if (errno == WSAEWOULDBLOCK)
+            errno = EAGAIN;
+    }
+    return ret;
+}
+
+int socket_recv(SOCKET s, char* buffer, int sz, int flag)
+{
+    int ret = recv(s, buffer, sz, flag);
+    if (ret == SOCKET_ERROR)  {
+        errno = WSAGetLastError();
+        if (errno == WSAEWOULDBLOCK)
+            errno = EAGAIN;
+    }
+    return ret;
+}
+
+int socket_getsockopt(SOCKET s, int level, int optname, void* optval, int* optlen)
+{
+    return getsockopt(s, level, optname, (char*)optval, optlen);
+}
+
+int socket_setsockopt(SOCKET s, int level, int optname, const void* optval, int optlen)
+{
+    return setsockopt(s, level, optname, (char*)optval, optlen);
+}
+
+int socket_recvfrom(SOCKET s, void* buf, int len, int flags, struct sockaddr* from, int* fromlen)
+{
+    int ret = recvfrom(s, (char*)buf, len, flags, from, fromlen);
+    if (ret == SOCKET_ERROR)  {
+        errno = WSAGetLastError();
+        if (errno == WSAEWOULDBLOCK)
+            errno = EAGAIN;
+        if (errno == WSAECONNRESET)
+            errno = EAGAIN;
+    }
+    return ret;
+}
+
+int socket_start()
+{
+    WORD wVersionRq = MAKEWORD(2, 0);
+    WSADATA wsaData;
+    int err = WSAStartup(wVersionRq, &wsaData);
+    if (err != 0)
+    {
+        printf("Error initializing ws2_32.dll");
+        assert(0);
+        return -1;
+    }
+    if ((LOBYTE(wsaData.wVersion) != 2) || (HIBYTE(wsaData.wVersion) != 0))
+    {
+        WSACleanup();
+        printf("Error initializing ws2_32.dll");
+        assert(0);
+        return -1;
+    }
+    return 0;
+}
+
+int socket_stop()
+{
+    WSACleanup();
+    return 0;
+}
+
+int pipe(int fds[2]) 
+{
+    int err = socket_start();
+    if (err != 0)
+    {
+        return err;
+    }
+    struct sockaddr_in name;
+    int namelen = sizeof(name);
+    SOCKET server = INVALID_SOCKET;
+    SOCKET client1 = INVALID_SOCKET;
+    SOCKET client2 = INVALID_SOCKET;
+
+    memset(&name, 0, sizeof(name));
+    name.sin_family = AF_INET;
+    name.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    name.sin_port = 0;
+
+    server = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (server == INVALID_SOCKET)
+        goto failed;
+
+    int yes=1;
+    if (setsockopt(server,SOL_SOCKET,SO_REUSEADDR,(char*)&yes,sizeof(yes)) == SOCKET_ERROR)
+       goto failed;          
+
+    if (bind(server, (struct sockaddr*)&name, namelen) == SOCKET_ERROR) 
+        goto failed;
+
+    if (listen(server, 5) == SOCKET_ERROR)
+        goto failed;
+
+    if(getsockname(server, (struct sockaddr*)&name, &namelen) == SOCKET_ERROR)
+        goto failed;
+
+    client1 = socket(AF_INET, SOCK_STREAM, 0);
+    if (client1 == INVALID_SOCKET)
+        goto failed;
+
+    if (connect(client1, (struct sockaddr*)&name, namelen) == SOCKET_ERROR)
+        goto failed;
+
+    client2 = accept(server, (struct sockaddr*)&name, &namelen);
+    if (client2 == INVALID_SOCKET)
+        goto failed;
+
+    // closesocket(server);
+    fds[0] = (int)client1;
+    fds[1] = (int)client2;
+    return 0;
+
+failed:
+    if (server != INVALID_SOCKET)
+        closesocket(server);
+
+    if (client1 != INVALID_SOCKET)
+        closesocket(client1);
+
+    if (client2 != INVALID_SOCKET)
+        closesocket(client2);
+    return -1;
+}
+
+//////////////socket//////////////
+
+
 
 #endif

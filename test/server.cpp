@@ -2,6 +2,7 @@
 #include <map>
 #include <set>
 #include <memory>
+#include <string.h>
 #include "opensocket.h"
 #include "open/openthread.h"
 using namespace open;
@@ -18,25 +19,29 @@ struct SocketProto : public OpenThreadProto
     virtual inline int protoType() const { return SocketProto::ProtoType(); }
 };
 
+
 class ProtoBuffer : public OpenThreadProto
 {
-    void* data_;
+    std::shared_ptr<void> data_;
 public:
     int msgId_;
-    ProtoBuffer() : OpenThreadProto(), msgId_(0) , data_(0) {}
-    virtual ~ProtoBuffer() { if (data_) delete data_; }
+    ProtoBuffer()
+        : OpenThreadProto()
+        , msgId_(0)
+        , data_(0) {}
+    virtual ~ProtoBuffer() {}
     template <class T>
     inline T& data()
     {
         T* t = 0;
         if (data_)
         {
-            t = dynamic_cast<T*>((T*)data_);
-            if (data_ == t) return *t;
-            delete data_;
+            t = dynamic_cast<T*>((T*)data_.get());
+            if (data_.get() == t) return *t;
+            data_.reset();
         }
         t = new T;
-        data_ = t;
+        data_ = std::shared_ptr<T>(t);
         return *t;
     }
     template <class T>
@@ -44,16 +49,17 @@ public:
     {
         if (data_)
         {
-            T* t = dynamic_cast<T*>((T*)data_);
-            if (data_ == t) return *t;
+            T* t = dynamic_cast<T*>((T*)data_.get());
+            if (data_.get() == t) return *t;
         }
         assert(false);
         static T t;
         return t;
     }
-    static inline int ProtoType() { return 2; }
+    static inline int ProtoType() { return (int)(uintptr_t) & (ProtoType); }
     virtual inline int protoType() const { return ProtoBuffer::ProtoType(); }
 };
+
 
 ////////////App//////////////////////
 class App
@@ -68,7 +74,7 @@ class App
             proto->srcName_ = "OpenSocket";
             proto->data_ = std::shared_ptr<OpenSocketMsg>((OpenSocketMsg*)msg);
             if (!OpenThread::Send((int)msg->uid_, proto))
-                printf("SocketFunc dispatch faild pid = %lld\n", msg->uid_);
+                printf("SocketFunc dispatch faild pid = %d\n", (int)msg->uid_);
             return;
         }
         delete msg;

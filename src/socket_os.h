@@ -8,84 +8,10 @@ extern "C" {
 #endif
 
 
-// ////////////socket//////////////
-#if defined(WIN32) || defined(_WIN32) || defined(WIN64) || defined(_WIN64)
-#define _CRT_SECURE_NO_WARNINGS
-#define _WINSOCK_DEPRECATED_NO_WARNINGS
-#include <winsock2.h> /* must always be included before ws2tcpip.h */
-#include <ws2tcpip.h> /* for struct sock_addr used in zookeeper.h */
-#undef near
-
-int socket_write(int fd, const void* buffer, size_t sz);
-int socket_read(int fd, void* buffer, size_t sz);
-int socket_close(int fd);
-int socket_connect(SOCKET s, const struct sockaddr* name, int namelen);
-int socket_send(SOCKET s, const char* buffer, int sz, int flag);
-int socket_recv(SOCKET s, char* buffer, int sz, int flag);
-
-int socket_recvfrom(SOCKET s, void* buf, int len, int flags, struct sockaddr* from, int* fromlen);
-int socket_start();
-int socket_stop();
-
-int socket_getsockopt(SOCKET s, int level, int optname, void* optval, int* optlen);
-int socket_setsockopt(SOCKET s, int level, int optname, const void* optval, int optlen);
-int pipe(int fds[2]);
-
-#else
-
-#include <sys/socket.h>
-#include <unistd.h>
-#include <netdb.h>
-#include <arpa/inet.h>
-//static inline int socket_write(int fd, const void* buffer, size_t sz) {
-//	return write(fd, buffer, sz);
-//}
-//
-//static inline int socket_read(int fd, void* buffer, size_t sz) {
-//	return read(fd, buffer, sz);
-//}
-
-static inline int socket_close(int fd) {
-	return close(fd);
-}
-
-//static inline int socket_connect(int s, const struct sockaddr* name, int namelen) {
-//	return connect(s, name, namelen);
-//}
-//
-//static inline int socket_send(int s, const char* buffer, int sz, int flag) {
-//	return send(s, buffer, sz, flag);
-//}
-//
-//static inline int socket_recv(int s, char* buffer, int sz, int flag) {
-//	return recv(s, buffer, sz, flag);
-//}
-//
-//static inline int socket_recvfrom(int s, void* buf, int len, int flags, struct sockaddr* from, socklen_t* fromlen) {
-//	return recvfrom(s, buf, len, flags, from, fromlen);
-//}
-#define socket_write write
-#define socket_read read
-//#define socket_close close
-
-#define socket_connect connect
-#define socket_send send
-#define socket_recv recv
-#define socket_recvfrom recvfrom
-
-#define socket_getsockopt getsockopt
-#define socket_setsockopt setsockopt
-
-inline int socket_start() { return 0; }
-inline int socket_stop() { return 0; }
-
-#endif
-
-// ////////////socket//////////////
-
 
 //////////////poll//////////////
 #if defined(WIN32) || defined(_WIN32) || defined(WIN64) || defined(_WIN64)
+
 #include "wepoll.h"
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -106,7 +32,9 @@ extern void sp_del(poll_fd fd, SOCKET sock);
 extern void sp_write(poll_fd, SOCKET sock, void* ud, bool enable);
 extern int sp_wait(poll_fd, struct event* e, int max);
 extern void sp_nonblocking(SOCKET sock);
+
 #else
+
 struct event {
 	void* s;
 	bool read;
@@ -124,9 +52,12 @@ extern void sp_del(poll_fd fd, int sock);
 extern void sp_write(poll_fd, int sock, void* ud, bool enable);
 extern int sp_wait(poll_fd, struct event* e, int max);
 extern void sp_nonblocking(int sock);
+
 #endif
 
 // ////////////poll//////////////
+
+
 
 
 
@@ -279,6 +210,86 @@ static inline void spinlock_destroy(struct spinlock *lock) {
 #endif
 
 //////////////spinlock//////////////
+
+
+
+
+// ////////////socket//////////////
+#if defined(WIN32) || defined(_WIN32) || defined(WIN64) || defined(_WIN64)
+#define _CRT_SECURE_NO_WARNINGS
+#define _WINSOCK_DEPRECATED_NO_WARNINGS
+#include <winsock2.h> /* must always be included before ws2tcpip.h */
+#include <ws2tcpip.h> /* for struct sock_addr used in zookeeper.h */
+#undef near
+
+int socket_write(int fd, const void* buffer, size_t sz);
+int socket_read(int fd, void* buffer, size_t sz);
+int socket_close(int fd);
+int socket_connect(SOCKET s, const struct sockaddr* name, int namelen);
+int socket_send(SOCKET s, const char* buffer, int sz, int flag);
+int socket_recv(SOCKET s, char* buffer, int sz, int flag);
+
+int socket_recvfrom(SOCKET s, void* buf, int len, int flags, struct sockaddr* from, int* fromlen);
+int socket_start();
+int socket_stop();
+
+int socket_getsockopt(SOCKET s, int level, int optname, void* optval, int* optlen);
+int socket_setsockopt(SOCKET s, int level, int optname, const void* optval, int optlen);
+int pipe(int fds[2]);
+
+#else
+
+#include <sys/socket.h>
+#include <unistd.h>
+#include <netdb.h>
+#include <arpa/inet.h>
+//static inline int socket_write(int fd, const void* buffer, size_t sz) {
+//	return write(fd, buffer, sz);
+//}
+//
+//static inline int socket_read(int fd, void* buffer, size_t sz) {
+//	return read(fd, buffer, sz);
+//}
+
+static inline int socket_close(int fd) {
+	return close(fd);
+}
+
+//static inline int socket_connect(int s, const struct sockaddr* name, int namelen) {
+//	return connect(s, name, namelen);
+//}
+//
+//static inline int socket_send(int s, const char* buffer, int sz, int flag) {
+//	return send(s, buffer, sz, flag);
+//}
+//
+//static inline int socket_recv(int s, char* buffer, int sz, int flag) {
+//	return recv(s, buffer, sz, flag);
+//}
+//
+//static inline int socket_recvfrom(int s, void* buf, int len, int flags, struct sockaddr* from, socklen_t* fromlen) {
+//	return recvfrom(s, buf, len, flags, from, fromlen);
+//}
+#define socket_write write
+#define socket_read read
+//#define socket_close close
+
+#define socket_connect connect
+#define socket_send send
+#define socket_recv recv
+#define socket_recvfrom recvfrom
+
+#define socket_getsockopt getsockopt
+#define socket_setsockopt setsockopt
+
+inline int socket_start() { return 0; }
+inline int socket_stop() { return 0; }
+
+#endif
+
+// ////////////socket//////////////
+
+
 
 
 #ifdef __cplusplus

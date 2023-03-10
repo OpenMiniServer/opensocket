@@ -5,8 +5,8 @@ extern "C" {
 
 #if defined(WIN32) || defined(_WIN32) || defined(WIN64) || defined(_WIN64)
 
-#define ssize_t size_t
 #define _CRT_SECURE_NO_WARNINGS
+#define ssize_t size_t
 
 #else
 

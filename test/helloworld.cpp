@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <time.h>
 #include <math.h>
+#include <string.h>
 #include "opensocket.h"
 #include "open/openthread.h"
 using namespace open;
@@ -33,7 +34,7 @@ static void SocketFunc(const OpenSocketMsg* msg)
     bool ret = OpenThread::Send((int)msg->uid_, proto);
     if (!ret)
     {
-        printf("SocketFunc dispatch faild pid = %lld\n", msg->uid_);
+        printf("SocketFunc dispatch faild pid = %d\n", (int)msg->uid_);
     }
 }
 
