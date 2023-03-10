@@ -16,6 +16,8 @@
 #include <vector>
 #include <queue>
 #include <atomic>
+#include <assert.h>
+#include <map>
 
 #if defined(WIN32) || defined(_WIN32) || defined(WIN64) || defined(_WIN64)
 #ifdef __cplusplus
@@ -66,6 +68,8 @@ namespace open
 
 class OpenThreadRef;
 class OpenThreadPool;
+
+////////////OpenThread//////////////////////
 class OpenThread
 {
 public:
@@ -231,27 +235,7 @@ private:
 };
 typedef const OpenThread::Msg OpenThreadMsg;
 
-class OpenThreader
-{
-public:
-    OpenThreader(const std::string& name) :name_(name), pid_(-1) {}
-    virtual ~OpenThreader(){ stop(); }
-    virtual bool start();
-    virtual void stop();
-    virtual void onStart() { }
-    virtual void onMsg(OpenThreadMsg& msg) { }
-    virtual void onStop() { }
-    const inline int pid() { return pid_; }
-    const std::string& name() { return name_; }
-    static void Thread(OpenThreadMsg& msg);
-    static inline int ThreadId(const std::string& name) { return OpenThread::ThreadId(name); }
-    static inline const std::string& ThreadName(int pid) { return OpenThread::ThreadName(pid); }
-protected:
-    int pid_;
-    const std::string name_;
-    std::shared_ptr<OpenThread> thread_;
-};
-
+////////////OpenThreadPool//////////////////////
 class OpenThreadPool
 {
     class SafeMap
@@ -314,6 +298,7 @@ private:
     pthread_mutex_t mutex_close_;
 };
 
+////////////OpenThreadRef//////////////////////
 class OpenThreadRef
 {
     std::shared_ptr<OpenThread> thread_;
@@ -339,6 +324,83 @@ public:
     friend class OpenThread;
 };
 
+////////////OpenThreader//////////////////////
+class OpenThreader
+{
+public:
+    OpenThreader(const std::string& name) :name_(name), pid_(-1) {}
+    virtual ~OpenThreader(){ stop(); }
+    virtual bool start();
+    virtual void stop();
+    virtual void onStart() { }
+    virtual void onMsg(OpenThreadMsg& msg) { }
+    virtual void onStop() { }
+    const inline int pid() { return pid_; }
+    const std::string& name() { return name_; }
+    static void Thread(OpenThreadMsg& msg);
+    static inline int ThreadId(const std::string& name) { return OpenThread::ThreadId(name); }
+    static inline const std::string& ThreadName(int pid) { return OpenThread::ThreadName(pid); }
+protected:
+    int pid_;
+    const std::string name_;
+    std::shared_ptr<OpenThread> thread_;
+};
+
+////////////OpenThreadProto//////////////////////
+struct OpenThreadProto
+{
+    int srcPid_;
+    std::string srcName_;
+
+    OpenThreadProto() :srcPid_(-1) {}
+    int srcPid() { return srcPid_; }
+    const std::string& srcName() { return srcName_; }
+    int srcPid() const { return srcPid_; }
+    const std::string& srcName() const { return srcName_; }
+
+    static inline int ProtoType() { return -1; }
+    //implement
+    virtual inline int protoType() const { assert(false); return OpenThreadProto::ProtoType(); }
+};
+
+////////////OpenThreadWorker//////////////////////
+class OpenThreadWorker;
+typedef void(OpenThreadWorker::*OpenThreadHandle)(const OpenThreadProto&);
+class OpenThreadWorker : public OpenThreader
+{
+public:
+    OpenThreadWorker(const std::string& name)
+        :OpenThreader(name) {}
+    virtual ~OpenThreadWorker() {}
+
+    virtual bool send(int pid, const std::shared_ptr<void>& data);
+    virtual bool send(std::vector<int>& vectPid, const std::shared_ptr<void>& data);
+    virtual bool sendLoop(const std::shared_ptr<void>& data);
+    static bool Send(int pid, const std::shared_ptr<void>& data);
+    void registers(int protoId, const OpenThreadHandle handle) 
+    { 
+        std::map<int, OpenThreadHandle>::iterator iter = mapHandle_.find(protoId);
+        if (iter != mapHandle_.end())
+        {
+            assert(false);
+            return;
+        }
+        mapHandle_[protoId] = handle;
+    }
+protected:
+    bool canLoop()
+    {
+        OpenThread* p = thread_.get();
+        return p ? (p->isRunning() && !p->hasMsg()) : false;
+    }
+    virtual void onMsg(OpenThreadMsg& msg);
+    
+    //std::unordered_map
+    std::map<int, OpenThreadHandle> mapHandle_;
+};
+
+
+////////////OpenSync//////////////////////
 class OpenSync
 {
     class OpenSyncRef
@@ -426,7 +488,7 @@ class OpenSyncReturn
             pthread_mutex_init(&mutex_, NULL);
             pthread_cond_init(&cond_, NULL);
         }
-        OpenSyncRef(const OpenSyncRef&)
+        OpenSyncRef(const OpenSyncRef& that)
         {
             assert(false);
             isSleep_ = that.isSleep_;

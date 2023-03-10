@@ -6,6 +6,7 @@
 #include "opensocket.h"
 using namespace open;
 
+////////////HttpRequest//////////////////////
 class HttpRequest
 {
     std::string url_;
@@ -19,47 +20,7 @@ public:
     std::string body_;
     HttpRequest() :port_(80) {}
     std::string& operator[](const std::string& key) { return headers_[key]; }
-    void setUrl(const std::string& url)
-    {
-        if (url.empty()) return;
-        url_ = url;
-        int len = (int)url.length();
-        char* ptr = (char*)url.c_str();
-        if (len >= 8)
-        {
-            if (memcmp(ptr, "http://", strlen("http://")) == 0)
-                ptr += strlen("http://");
-            else if (memcmp(ptr, "https://", strlen("https://")) == 0)
-                ptr += strlen("https://");
-        }
-        const char* tmp = strstr(ptr, "/");
-        path_.clear();
-        if (tmp != 0)
-        {
-            path_.append(tmp);
-            host_.clear();
-            host_.append(ptr, tmp - ptr);
-        }
-        else
-        {
-            host_ = ptr;
-        }
-        port_ = 80;
-        ip_.clear();
-        ptr = (char*)host_.c_str();
-        tmp = strstr(ptr, ":");
-        if (tmp != 0)
-        {
-            ip_.append(ptr, tmp - ptr);
-            tmp += 1;
-            port_ = atoi(tmp);
-        }
-        else
-        {
-            ip_ = ptr;
-        }
-        ip_ = OpenSocket::DomainNameToIp(ip_);
-    }
+    void setUrl(const std::string& url);
     inline void operator=(const std::string& url) { setUrl(url); }
 
     struct HttpResponse
@@ -71,83 +32,34 @@ public:
         //std::multimap<std::string, std::string> headers_;
         std::map<std::string, std::string> headers_;
         std::string& operator[](const std::string& key) { return headers_[key]; }
+
         HttpResponse():code_(0), clen_(0) {}
-        void parseHeader()
-        {
-            if (!headers_.empty() || head_.size() < 12) return;
-            std::string line;
-            const char* ptr = strstr(head_.c_str(), "\r\n");
-            if (!ptr) return;
-            code_ = 0;
-            clen_ = 0;
-            line.append(head_.c_str(), ptr - head_.c_str());
-            for (size_t i = 0; i < line.size(); i++)
-            {
-                if (line[i] == ' ')
-                {
-                    while (i < line.size() && line[i] == ' ') ++i;
-                    code_ = std::atoi(line.data() + i);
-                    break;
-                }
-            }
-            if (code_ <= 0) return;
-            line.clear();
-            int k = -1;
-            int j = -1;
-            std::string key;
-            std::string value;
-            for (size_t i = ptr - head_.c_str() + 2; i < head_.size() - 1; i++)
-            {
-                if (head_[i] == '\r' && head_[i + 1] == '\n')
-                {
-                    if (j >  0)
-                    {
-                        k = 0;
-                        while (k < line.size() && line[k] == ' ') ++k;
-                        while (k >= 0 && line.back() == ' ') line.pop_back();
-                        value = line.data() + j + 1;
-                        while (j >= 0 && line[j] == ' ') j--;
-                        key.clear();
-                        key.append(line.data(), j);
-                        for (size_t x = 0; x < key.size(); x++)
-                            key[x] = std::tolower(key[x]);
-                        headers_[key] = value;
-                    }
-                    ++i;
-                    j = -1;
-                    line.clear();
-                    continue;
-                }
-                line.push_back(head_[i]);
-                if (j < 0 && line.back() == ':')
-                {
-                    j = line.size() - 1;
-                }
-            }
-            clen_ = std::atoi(headers_["content-length"].c_str());
-        }
+        void parseHeader();
+        bool pushData(const char* data, size_t size);
     };
     HttpResponse response_;
     OpenSync openSync_;
 };
 
-struct BaseProto
-{
-    bool isSocket_;
-};
-
-struct SocketProto : public BaseProto
+////////////Proto//////////////////////
+struct SocketProto : public OpenThreadProto
 {
     std::shared_ptr<OpenSocketMsg> data_;
+    static inline int ProtoType() { return 1; }
+    virtual inline int protoType() const { return SocketProto::ProtoType(); }
 };
 
-struct TaskProto : public BaseProto
+struct TaskProto : public OpenThreadProto
 {
     int fd_;
     OpenSync openSync_;
     std::shared_ptr<HttpRequest> request_;
+    static inline int ProtoType() { return 2; }
+    virtual inline int protoType() const { return TaskProto::ProtoType(); }
+    TaskProto() :fd_(0) {}
 };
 
+////////////App//////////////////////
 class App
 {
     static void SocketFunc(const OpenSocketMsg* msg)
@@ -156,7 +68,8 @@ class App
         if (msg->uid_ >= 0)
         {
             auto proto = std::shared_ptr<SocketProto>(new SocketProto);
-            proto->isSocket_ = true;
+            proto->srcPid_  = -1;
+            proto->srcName_ = "OpenSocket";
             proto->data_ = std::shared_ptr<OpenSocketMsg>((OpenSocketMsg*)msg);
             if (!OpenThread::Send((int)msg->uid_, proto))
                 printf("SocketFunc dispatch faild pid = %lld\n", msg->uid_);
@@ -171,7 +84,8 @@ public:
 App App::Instance_;
 
 
-class HttpClient : public OpenThreader
+////////////HttpClient//////////////////////
+class HttpClient : public OpenThreadWorker
 {
     //Factory
     class Factory
@@ -195,8 +109,10 @@ class HttpClient : public OpenThreader
 
     // HttpClient
     HttpClient(const std::string& name)
-        :OpenThreader(name)
+        :OpenThreadWorker(name)
     {
+        registers(SocketProto::ProtoType(), (OpenThreadHandle)&HttpClient::onSocketProto);
+        registers(TaskProto::ProtoType(), (OpenThreadHandle)&HttpClient::onTaskProto);
         start();
     }
     ~HttpClient()
@@ -204,7 +120,9 @@ class HttpClient : public OpenThreader
         for (auto iter = mapFdToTask_.begin(); iter != mapFdToTask_.end(); iter++)
             iter->second.openSync_.wakeup();
     }
-    void onHttp(TaskProto& proto)
+
+private:
+    void onTaskProto(TaskProto& proto)
     {
         auto& request = proto.request_;
         proto.fd_ = App::Instance_.openSocket_.connect(pid(), request->ip_, request->port_);
@@ -213,7 +131,7 @@ class HttpClient : public OpenThreader
         request->response_.body_.clear();
         mapFdToTask_[proto.fd_] = proto;
     }
-    void onSend(const std::shared_ptr<OpenSocketMsg>& data)
+    void onSendHttp(const std::shared_ptr<OpenSocketMsg>& data)
     {
         auto iter = mapFdToTask_.find(data->fd_);
         if (iter == mapFdToTask_.end())
@@ -241,7 +159,7 @@ class HttpClient : public OpenThreader
         }
         App::Instance_.openSocket_.send(task.fd_, buffer.data(), (int)buffer.size());
     }
-    void onRead(const std::shared_ptr<OpenSocketMsg>& data)
+    void onReadHttp(const std::shared_ptr<OpenSocketMsg>& data)
     {
         auto iter = mapFdToTask_.find(data->fd_);
         if (iter == mapFdToTask_.end())
@@ -251,37 +169,12 @@ class HttpClient : public OpenThreader
         }
         auto& task = iter->second;
         auto& response = task.request_->response_;
-        if (response.code_ == -1)
+        if (response.pushData(data->data(), data->size()))
         {
-            response.head_.append(data->data(), data->size());
-            const char* ptr = strstr(response.head_.data(), "\r\n\r\n");
-            if (!ptr) return;
-            response.code_ = 0;
-            response.body_.append(ptr + 4);
-            response.head_.resize(ptr - response.head_.data() + 2);
-            response.parseHeader();
-        }
-        else
-        {
-            response.body_.append(data->data(), data->size());
-        }
-        if (response.clen_ > 0)
-        {
-            if (response.clen_ >= response.body_.size())
-                response.body_.resize(response.clen_);
             App::Instance_.openSocket_.close(pid(), data->fd_);
         }
-        else if (response.body_.size() > 2)
-        {
-            if (response.body_[response.body_.size() - 2] == '\r' && response.body_.back() == '\n')
-            {
-                response.body_.pop_back();
-                response.body_.pop_back();
-                App::Instance_.openSocket_.close(pid(), data->fd_);
-            }
-        }
     }
-    void onClose(const std::shared_ptr<OpenSocketMsg>& data)
+    void onCloseHttp(const std::shared_ptr<OpenSocketMsg>& data)
     {
         auto iter = mapFdToTask_.find(data->fd_);
         if (iter != mapFdToTask_.end())
@@ -290,26 +183,26 @@ class HttpClient : public OpenThreader
             mapFdToTask_.erase(iter);
         }
     }
-    void onSocket(const SocketProto& proto)
+    void onSocketProto(const SocketProto& proto)
     {
         const auto& msg = proto.data_;
         switch (msg->type_)
         {
         case OpenSocket::ESocketData:
-            onRead(msg);
+            onReadHttp(msg);
             break;
         case OpenSocket::ESocketClose:
-            onClose(msg);
+            onCloseHttp(msg);
             break;
         case OpenSocket::ESocketError:
             printf("[%s]ESocketError:%s\n", ThreadName((int)msg->uid_).c_str(), msg->info());
-            onClose(msg);
+            onCloseHttp(msg);
             break;
         case OpenSocket::ESocketWarning:
             printf("[%s]ESocketWarning:%s\n", ThreadName((int)msg->uid_).c_str(), msg->info());
             break;
         case OpenSocket::ESocketOpen:
-            onSend(msg);
+            onSendHttp(msg);
             break;
         case OpenSocket::ESocketAccept:
         case OpenSocket::ESocketUdp:
@@ -317,21 +210,6 @@ class HttpClient : public OpenThreader
             break;
         default:
             break;
-        }
-    }
-    virtual void onMsg(OpenThreadMsg& msg)
-    {
-        const BaseProto* data = msg.data<BaseProto>();
-        if (!data) return;
-        if (!data->isSocket_)
-        {
-            TaskProto* proto = msg.edit<TaskProto>();
-            if (proto) onHttp(*proto);
-        }
-        else
-        {
-            const SocketProto* proto = msg.data<SocketProto>();
-            if (proto) onSocket(*proto);
         }
     }
     std::map<int, TaskProto> mapFdToTask_;
@@ -348,7 +226,6 @@ public:
         if (!worker)  return false;
         auto proto = std::shared_ptr<TaskProto>(new TaskProto);
         proto->request_ = request;
-        proto->isSocket_ = false;
         bool ret = OpenThread::Send(worker->pid(), proto);
         assert(ret);
         proto->openSync_.await();
@@ -376,4 +253,139 @@ int main()
     auto& response = request->response_;
     printf("code:%d, header:%s\n", response.code_, response.head_.c_str());
     return getchar();
+}
+
+
+void HttpRequest::setUrl(const std::string& url)
+{
+    if (url.empty()) return;
+    url_ = url;
+    int len = (int)url.length();
+    char* ptr = (char*)url.c_str();
+    if (len >= 8)
+    {
+        if (memcmp(ptr, "http://", strlen("http://")) == 0)
+            ptr += strlen("http://");
+        else if (memcmp(ptr, "https://", strlen("https://")) == 0)
+            ptr += strlen("https://");
+    }
+    const char* tmp = strstr(ptr, "/");
+    path_.clear();
+    if (tmp != 0)
+    {
+        path_.append(tmp);
+        host_.clear();
+        host_.append(ptr, tmp - ptr);
+    }
+    else
+    {
+        host_ = ptr;
+    }
+    port_ = 80;
+    ip_.clear();
+    ptr = (char*)host_.c_str();
+    tmp = strstr(ptr, ":");
+    if (tmp != 0)
+    {
+        ip_.append(ptr, tmp - ptr);
+        tmp += 1;
+        port_ = atoi(tmp);
+    }
+    else
+    {
+        ip_ = ptr;
+    }
+    ip_ = OpenSocket::DomainNameToIp(ip_);
+}
+
+
+void HttpRequest::HttpResponse::parseHeader()
+{
+    if (!headers_.empty() || head_.size() < 12) return;
+    std::string line;
+    const char* ptr = strstr(head_.c_str(), "\r\n");
+    if (!ptr) return;
+    code_ = 0;
+    clen_ = 0;
+    line.append(head_.c_str(), ptr - head_.c_str());
+    for (size_t i = 0; i < line.size(); i++)
+    {
+        if (line[i] == ' ')
+        {
+            while (i < line.size() && line[i] == ' ') ++i;
+            code_ = std::atoi(line.data() + i);
+            break;
+        }
+    }
+    if (code_ <= 0) return;
+    line.clear();
+    int k = -1;
+    int j = -1;
+    std::string key;
+    std::string value;
+    for (size_t i = ptr - head_.c_str() + 2; i < head_.size() - 1; i++)
+    {
+        if (head_[i] == '\r' && head_[i + 1] == '\n')
+        {
+            if (j > 0)
+            {
+                k = 0;
+                while (k < line.size() && line[k] == ' ') ++k;
+                while (k >= 0 && line.back() == ' ') line.pop_back();
+                value = line.data() + j + 1;
+                while (j >= 0 && line[j] == ' ') j--;
+                key.clear();
+                key.append(line.data(), j);
+                for (size_t x = 0; x < key.size(); x++)
+                    key[x] = std::tolower(key[x]);
+                headers_[key] = value;
+            }
+            ++i;
+            j = -1;
+            line.clear();
+            continue;
+        }
+        line.push_back(head_[i]);
+        if (j < 0 && line.back() == ':')
+        {
+            j = (int)line.size() - 1;
+        }
+    }
+    clen_ = std::atoi(headers_["content-length"].c_str());
+}
+
+bool HttpRequest::HttpResponse::pushData(const char* data, size_t size)
+{
+    if (code_ == -1)
+    {
+        head_.append(data, size);
+        const char* ptr = strstr(head_.data(), "\r\n\r\n");
+        if (!ptr) return false;
+        code_ = 0;
+        body_.append(ptr + 4);
+        head_.resize(ptr - head_.data() + 2);
+        parseHeader();
+    }
+    else
+    {
+        body_.append(data, size);
+    }
+    if (clen_ > 0)
+    {
+        if (clen_ >= body_.size())
+        {
+            body_.resize(clen_);
+            return true;
+        }
+    }
+    else if (body_.size() > 2)
+    {
+        if (body_[body_.size() - 2] == '\r' && body_.back() == '\n')
+        {
+            body_.pop_back();
+            body_.pop_back();
+            return true;
+        }
+    }
+    return false;
 }

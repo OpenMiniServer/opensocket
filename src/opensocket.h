@@ -111,6 +111,7 @@ private:
 
 	void (*cb_)(const Msg*);
 	bool isRunning_;
+	bool isClose_;
 	void* socket_server_;
 };
 

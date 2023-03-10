@@ -311,6 +311,7 @@ Designing a high-concurrency HttpClient using OpenThread’s Worker mode.
 #include "opensocket.h"
 using namespace open;
 
+////////////HttpRequest//////////////////////
 class HttpRequest
 {
     std::string url_;
@@ -324,48 +325,9 @@ public:
     std::string body_;
     HttpRequest() :port_(80) {}
     std::string& operator[](const std::string& key) { return headers_[key]; }
-    void setUrl(const std::string& url)
-    {
-        if (url.empty()) return;
-        url_ = url;
-        int len = (int)url.length();
-        char* ptr = (char*)url.c_str();
-        if (len >= 8)
-        {
-            if (memcmp(ptr, "http://", strlen("http://")) == 0)
-                ptr += strlen("http://");
-            else if (memcmp(ptr, "https://", strlen("https://")) == 0)
-                ptr += strlen("https://");
-        }
-        const char* tmp = strstr(ptr, "/");
-        path_.clear();
-        if (tmp != 0)
-        {
-            path_.append(tmp);
-            host_.clear();
-            host_.append(ptr, tmp - ptr);
-        }
-        else
-        {
-            host_ = ptr;
-        }
-        port_ = 80;
-        ip_.clear();
-        ptr = (char*)host_.c_str();
-        tmp = strstr(ptr, ":");
-        if (tmp != 0)
-        {
-            ip_.append(ptr, tmp - ptr);
-            tmp += 1;
-            port_ = atoi(tmp);
-        }
-        else
-        {
-            ip_ = ptr;
-        }
-        ip_ = OpenSocket::DomainNameToIp(ip_);
-    }
+    void setUrl(const std::string& url);
     inline void operator=(const std::string& url) { setUrl(url); }
+
     struct HttpResponse
     {
         int code_;
@@ -375,79 +337,34 @@ public:
         //std::multimap<std::string, std::string> headers_;
         std::map<std::string, std::string> headers_;
         std::string& operator[](const std::string& key) { return headers_[key]; }
+
         HttpResponse():code_(0), clen_(0) {}
-        void parseHeader()
-        {
-            if (!headers_.empty() || head_.size() < 12) return;
-            std::string line;
-            const char* ptr = strstr(head_.c_str(), "\r\n");
-            if (!ptr) return;
-            code_ = 0;
-            clen_ = 0;
-            line.append(head_.c_str(), ptr - head_.c_str());
-            for (size_t i = 0; i < line.size(); i++)
-            {
-                if (line[i] == ' ')
-                {
-                    while (i < line.size() && line[i] == ' ') ++i;
-                    code_ = std::atoi(line.data() + i);
-                    break;
-                }
-            }
-            if (code_ <= 0) return;
-            line.clear();
-            int k = -1;
-            int j = -1;
-            std::string key;
-            std::string value;
-            for (size_t i = ptr - head_.c_str() + 2; i < head_.size() - 1; i++)
-            {
-                if (head_[i] == '\r' && head_[i + 1] == '\n')
-                {
-                    if (j >  0)
-                    {
-                        k = 0;
-                        while (k < line.size() && line[k] == ' ') ++k;
-                        while (k >= 0 && line.back() == ' ') line.pop_back();
-                        value = line.data() + j + 1;
-                        while (j >= 0 && line[j] == ' ') j--;
-                        key.clear();
-                        key.append(line.data(), j);
-                        for (size_t x = 0; x < key.size(); x++)
-                            key[x] = std::tolower(key[x]);
-                        headers_[key] = value;
-                    }
-                    ++i;
-                    j = -1;
-                    line.clear();
-                    continue;
-                }
-                line.push_back(head_[i]);
-                if (j < 0 && line.back() == ':')
-                {
-                    j = line.size() - 1;
-                }
-            }
-            clen_ = std::atoi(headers_["content-length"].c_str());
-        }
+        void parseHeader();
+        bool pushData(const char* data, size_t size);
     };
     HttpResponse response_;
     OpenSync openSync_;
 };
-struct BaseProto
-{
-    bool isSocket_;
-};
-struct SocketProto : public BaseProto
+
+////////////Proto//////////////////////
+struct SocketProto : public OpenThreadProto
 {
     std::shared_ptr<OpenSocketMsg> data_;
+    static inline int ProtoType() { return 1; }
+    virtual inline int protoType() const { return SocketProto::ProtoType(); }
 };
-struct TaskProto : public BaseProto
+
+struct TaskProto : public OpenThreadProto
 {
     int fd_;
     OpenSync openSync_;
     std::shared_ptr<HttpRequest> request_;
+    static inline int ProtoType() { return 2; }
+    virtual inline int protoType() const { return TaskProto::ProtoType(); }
+    TaskProto() :fd_(0) {}
 };
+
+////////////App//////////////////////
 class App
 {
     static void SocketFunc(const OpenSocketMsg* msg)
@@ -456,7 +373,8 @@ class App
         if (msg->uid_ >= 0)
         {
             auto proto = std::shared_ptr<SocketProto>(new SocketProto);
-            proto->isSocket_ = true;
+            proto->srcPid_  = -1;
+            proto->srcName_ = "OpenSocket";
             proto->data_ = std::shared_ptr<OpenSocketMsg>((OpenSocketMsg*)msg);
             if (!OpenThread::Send((int)msg->uid_, proto))
                 printf("SocketFunc dispatch faild pid = %lld\n", msg->uid_);
@@ -470,7 +388,9 @@ public:
 };
 App App::Instance_;
 
-class HttpClient : public OpenThreader
+
+////////////HttpClient//////////////////////
+class HttpClient : public OpenThreadWorker
 {
     //Factory
     class Factory
@@ -494,8 +414,10 @@ class HttpClient : public OpenThreader
 
     // HttpClient
     HttpClient(const std::string& name)
-        :OpenThreader(name)
+        :OpenThreadWorker(name)
     {
+        registers(SocketProto::ProtoType(), (OpenThreadHandle)&HttpClient::onSocketProto);
+        registers(TaskProto::ProtoType(), (OpenThreadHandle)&HttpClient::onTaskProto);
         start();
     }
     ~HttpClient()
@@ -503,7 +425,9 @@ class HttpClient : public OpenThreader
         for (auto iter = mapFdToTask_.begin(); iter != mapFdToTask_.end(); iter++)
             iter->second.openSync_.wakeup();
     }
-    void onHttp(TaskProto& proto)
+
+private:
+    void onTaskProto(TaskProto& proto)
     {
         auto& request = proto.request_;
         proto.fd_ = App::Instance_.openSocket_.connect(pid(), request->ip_, request->port_);
@@ -512,7 +436,7 @@ class HttpClient : public OpenThreader
         request->response_.body_.clear();
         mapFdToTask_[proto.fd_] = proto;
     }
-    void onSend(const std::shared_ptr<OpenSocketMsg>& data)
+    void onSendHttp(const std::shared_ptr<OpenSocketMsg>& data)
     {
         auto iter = mapFdToTask_.find(data->fd_);
         if (iter == mapFdToTask_.end())
@@ -540,7 +464,7 @@ class HttpClient : public OpenThreader
         }
         App::Instance_.openSocket_.send(task.fd_, buffer.data(), (int)buffer.size());
     }
-    void onRead(const std::shared_ptr<OpenSocketMsg>& data)
+    void onReadHttp(const std::shared_ptr<OpenSocketMsg>& data)
     {
         auto iter = mapFdToTask_.find(data->fd_);
         if (iter == mapFdToTask_.end())
@@ -550,37 +474,12 @@ class HttpClient : public OpenThreader
         }
         auto& task = iter->second;
         auto& response = task.request_->response_;
-        if (response.code_ == -1)
+        if (response.pushData(data->data(), data->size()))
         {
-            response.head_.append(data->data(), data->size());
-            const char* ptr = strstr(response.head_.data(), "\r\n\r\n");
-            if (!ptr) return;
-            response.code_ = 0;
-            response.body_.append(ptr + 4);
-            response.head_.resize(ptr - response.head_.data() + 2);
-            response.parseHeader();
-        }
-        else
-        {
-            response.body_.append(data->data(), data->size());
-        }
-        if (response.clen_ > 0)
-        {
-            if (response.clen_ >= response.body_.size())
-                response.body_.resize(response.clen_);
             App::Instance_.openSocket_.close(pid(), data->fd_);
         }
-        else if (response.body_.size() > 2)
-        {
-            if (response.body_[response.body_.size() - 2] == '\r' && response.body_.back() == '\n')
-            {
-                response.body_.pop_back();
-                response.body_.pop_back();
-                App::Instance_.openSocket_.close(pid(), data->fd_);
-            }
-        }
     }
-    void onClose(const std::shared_ptr<OpenSocketMsg>& data)
+    void onCloseHttp(const std::shared_ptr<OpenSocketMsg>& data)
     {
         auto iter = mapFdToTask_.find(data->fd_);
         if (iter != mapFdToTask_.end())
@@ -589,26 +488,26 @@ class HttpClient : public OpenThreader
             mapFdToTask_.erase(iter);
         }
     }
-    void onSocket(const SocketProto& proto)
+    void onSocketProto(const SocketProto& proto)
     {
         const auto& msg = proto.data_;
         switch (msg->type_)
         {
         case OpenSocket::ESocketData:
-            onRead(msg);
+            onReadHttp(msg);
             break;
         case OpenSocket::ESocketClose:
-            onClose(msg);
+            onCloseHttp(msg);
             break;
         case OpenSocket::ESocketError:
             printf("[%s]ESocketError:%s\n", ThreadName((int)msg->uid_).c_str(), msg->info());
-            onClose(msg);
+            onCloseHttp(msg);
             break;
         case OpenSocket::ESocketWarning:
             printf("[%s]ESocketWarning:%s\n", ThreadName((int)msg->uid_).c_str(), msg->info());
             break;
         case OpenSocket::ESocketOpen:
-            onSend(msg);
+            onSendHttp(msg);
             break;
         case OpenSocket::ESocketAccept:
         case OpenSocket::ESocketUdp:
@@ -616,21 +515,6 @@ class HttpClient : public OpenThreader
             break;
         default:
             break;
-        }
-    }
-    virtual void onMsg(OpenThreadMsg& msg)
-    {
-        const BaseProto* data = msg.data<BaseProto>();
-        if (!data) return;
-        if (!data->isSocket_)
-        {
-            TaskProto* proto = msg.edit<TaskProto>();
-            if (proto) onHttp(*proto);
-        }
-        else
-        {
-            const SocketProto* proto = msg.data<SocketProto>();
-            if (proto) onSocket(*proto);
         }
     }
     std::map<int, TaskProto> mapFdToTask_;
@@ -647,7 +531,6 @@ public:
         if (!worker)  return false;
         auto proto = std::shared_ptr<TaskProto>(new TaskProto);
         proto->request_ = request;
-        proto->isSocket_ = false;
         bool ret = OpenThread::Send(worker->pid(), proto);
         assert(ret);
         proto->openSync_.await();
@@ -655,6 +538,7 @@ public:
     }
 };
 HttpClient::Factory HttpClient::Instance_;
+
 int main()
 {
     auto request = std::shared_ptr<HttpRequest>(new HttpRequest);
@@ -675,6 +559,141 @@ int main()
     printf("code:%d, header:%s\n", response.code_, response.head_.c_str());
     return getchar();
 }
+
+
+void HttpRequest::setUrl(const std::string& url)
+{
+    if (url.empty()) return;
+    url_ = url;
+    int len = (int)url.length();
+    char* ptr = (char*)url.c_str();
+    if (len >= 8)
+    {
+        if (memcmp(ptr, "http://", strlen("http://")) == 0)
+            ptr += strlen("http://");
+        else if (memcmp(ptr, "https://", strlen("https://")) == 0)
+            ptr += strlen("https://");
+    }
+    const char* tmp = strstr(ptr, "/");
+    path_.clear();
+    if (tmp != 0)
+    {
+        path_.append(tmp);
+        host_.clear();
+        host_.append(ptr, tmp - ptr);
+    }
+    else
+    {
+        host_ = ptr;
+    }
+    port_ = 80;
+    ip_.clear();
+    ptr = (char*)host_.c_str();
+    tmp = strstr(ptr, ":");
+    if (tmp != 0)
+    {
+        ip_.append(ptr, tmp - ptr);
+        tmp += 1;
+        port_ = atoi(tmp);
+    }
+    else
+    {
+        ip_ = ptr;
+    }
+    ip_ = OpenSocket::DomainNameToIp(ip_);
+}
+
+
+void HttpRequest::HttpResponse::parseHeader()
+{
+    if (!headers_.empty() || head_.size() < 12) return;
+    std::string line;
+    const char* ptr = strstr(head_.c_str(), "\r\n");
+    if (!ptr) return;
+    code_ = 0;
+    clen_ = 0;
+    line.append(head_.c_str(), ptr - head_.c_str());
+    for (size_t i = 0; i < line.size(); i++)
+    {
+        if (line[i] == ' ')
+        {
+            while (i < line.size() && line[i] == ' ') ++i;
+            code_ = std::atoi(line.data() + i);
+            break;
+        }
+    }
+    if (code_ <= 0) return;
+    line.clear();
+    int k = -1;
+    int j = -1;
+    std::string key;
+    std::string value;
+    for (size_t i = ptr - head_.c_str() + 2; i < head_.size() - 1; i++)
+    {
+        if (head_[i] == '\r' && head_[i + 1] == '\n')
+        {
+            if (j > 0)
+            {
+                k = 0;
+                while (k < line.size() && line[k] == ' ') ++k;
+                while (k >= 0 && line.back() == ' ') line.pop_back();
+                value = line.data() + j + 1;
+                while (j >= 0 && line[j] == ' ') j--;
+                key.clear();
+                key.append(line.data(), j);
+                for (size_t x = 0; x < key.size(); x++)
+                    key[x] = std::tolower(key[x]);
+                headers_[key] = value;
+            }
+            ++i;
+            j = -1;
+            line.clear();
+            continue;
+        }
+        line.push_back(head_[i]);
+        if (j < 0 && line.back() == ':')
+        {
+            j = (int)line.size() - 1;
+        }
+    }
+    clen_ = std::atoi(headers_["content-length"].c_str());
+}
+
+bool HttpRequest::HttpResponse::pushData(const char* data, size_t size)
+{
+    if (code_ == -1)
+    {
+        head_.append(data, size);
+        const char* ptr = strstr(head_.data(), "\r\n\r\n");
+        if (!ptr) return false;
+        code_ = 0;
+        body_.append(ptr + 4);
+        head_.resize(ptr - head_.data() + 2);
+        parseHeader();
+    }
+    else
+    {
+        body_.append(data, size);
+    }
+    if (clen_ > 0)
+    {
+        if (clen_ >= body_.size())
+        {
+            body_.resize(clen_);
+            return true;
+        }
+    }
+    else if (body_.size() > 2)
+    {
+        if (body_[body_.size() - 2] == '\r' && body_.back() == '\n')
+        {
+            body_.pop_back();
+            body_.pop_back();
+            return true;
+        }
+    }
+    return false;
+}
 ```
 
 ## 3.HttpServer
@@ -692,136 +711,146 @@ OpenSocket is a wrapper for poll; only one OpenSocket object needs to be created
 #include <set>
 #include <memory>
 #include "opensocket.h"
-#include "openthread.h"
-#include "worker.h"
+#include "open/openthread.h"
 using namespace open;
 
 const std::string TestServerIp_ = "0.0.0.0";
 const int TestServerPort_ = 8888;
-//OpenSocket object; only one OpenSocket object needs to be created per process. 
-static OpenSocket openSocket_;
-// The message callback function of OpenSocket is executed by an internal thread 
-// and must immediately dispatch the message to other threads for processing.
-static void SocketFunc(const OpenSocketMsg* msg)
+
+//msgType == 1
+struct SocketProto : public OpenThreadProto
 {
-    if (msg->uid_ >= 0)
-    {
-        auto data = std::shared_ptr<Data>(new Data());
-        auto proto = std::shared_ptr<const OpenSocketMsg>(msg);
-        data->setProto(EProtoSocket, proto);
-        bool ret = OpenThread::Send((int)msg->uid_, data);
-        assert(ret);
-    }
-    else
-    {
-        delete msg;
-    }
-}
-////////////Listener//////////////////////
-struct ProtoBuffer
+    std::shared_ptr<OpenSocketMsg> data_;
+    static inline int ProtoType() { return 1; }
+    virtual inline int protoType() const { return SocketProto::ProtoType(); }
+};
+
+//msgType == 2
+struct RegisterProto : public OpenThreadProto
+{
+    int srcPid_;
+    static inline int ProtoType() { return 2; }
+    virtual inline int protoType() const { return RegisterProto::ProtoType(); }
+    RegisterProto() :srcPid_(-1) {}
+};
+
+//msgType == 3
+struct NewClientProto : public OpenThreadProto
 {
     int accept_fd_;
     std::string addr_;
+    static inline int ProtoType() { return 3; }
+    virtual inline int protoType() const { return NewClientProto::ProtoType(); }
+    NewClientProto() : accept_fd_(-1) {}
 };
-//Listen to socket connection events and send socket connection events to the accepter.
-class Listener : public Worker
+
+////////////App//////////////////////
+class App
 {
-    std::set<int> setSlaveId_;
-    std::vector<int> vectSlaveId_;
+    static void SocketFunc(const OpenSocketMsg* msg)
+    {
+        if (!msg) return;
+        if (msg->uid_ >= 0)
+        {
+            auto proto = std::shared_ptr<SocketProto>(new SocketProto);
+            proto->srcPid_ = -1;
+            proto->srcName_ = "OpenSocket";
+            proto->data_ = std::shared_ptr<OpenSocketMsg>((OpenSocketMsg*)msg);
+            if (!OpenThread::Send((int)msg->uid_, proto))
+                printf("SocketFunc dispatch faild pid = %lld\n", msg->uid_);
+        }
+        else
+        {
+            delete msg;
+        }
+    }
+public:
+    static App Instance_;
+    OpenSocket openSocket_;
+    App() { openSocket_.run(App::SocketFunc); }
+};
+App App::Instance_;
+
+////////////Listener//////////////////////
+class Listener : public OpenThreadWorker
+{
     int listen_fd_;
     unsigned int balance_;
-    bool isOpening_;
+    std::set<int> setSlaveId_;
+    std::vector<int> vectSlaveId_;
 public:
     Listener(const std::string& name)
-        :Worker(name),
+        :OpenThreadWorker(name),
         listen_fd_(-1)
     {
-        isOpening_ = false;
         balance_ = 0;
-        mapKeyFunc_["regist_slave"] = { (Handle)&Listener::regist_slave };
+        registers(SocketProto::ProtoType(), (OpenThreadHandle)&Listener::onSocketProto);
+        registers(RegisterProto::ProtoType(), (OpenThreadHandle)&Listener::onRegisterProto);
     }
     virtual ~Listener() {}
     virtual void onStart()
     {
-        // Start socket listen. 
-        listen_fd_ = openSocket_.listen((uintptr_t)pid(), TestServerIp_, TestServerPort_, 64);
+        listen_fd_ = App::Instance_.openSocket_.listen((uintptr_t)pid(), TestServerIp_, TestServerPort_, 64);
         if (listen_fd_ < 0)
         {
             printf("Listener::onStart faild listen_fd_ = %d\n", listen_fd_);
             assert(false);
         }
-        // The function of start is to start poll listening and listen to messages from listen_fd_.
-        openSocket_.start((uintptr_t)pid(), listen_fd_);
+        App::Instance_.openSocket_.start((uintptr_t)pid(), listen_fd_);
+        printf("HTTP: %s:%d\n", TestServerIp_.c_str(), TestServerPort_);
     }
-    // Receive registration messages from accepters; 
-    // sockets that are listened to will be sent to accepters for processing.
-    void regist_slave(const Data& data)
+    void onRegisterProto(const RegisterProto& proto)
     {
-        auto proto = data.proto<std::string>();
-        if (!proto)
+        if (proto.srcPid_ >= 0)
         {
-            assert(false);
-            return;
-        }
-        assert(*proto == "listen success!");
-        if (data.srcPid() >= 0)
-        {
-            if (setSlaveId_.find(data.srcPid()) == setSlaveId_.end())
+            if (setSlaveId_.find(proto.srcPid_) == setSlaveId_.end())
             {
-                setSlaveId_.insert(data.srcPid());
-                vectSlaveId_.push_back(data.srcPid());
-                printf("Hello OpenThread, srcPid = %d\n", data.srcPid());
+                setSlaveId_.insert(proto.srcPid_);
+                vectSlaveId_.push_back(proto.srcPid_);
+                printf("Hello OpenSocket HttpServer, srcPid = %d\n", proto.srcPid_);
             }
         }
     }
-    // Send the listened fd and ip to one of the accepters; 
-    // at this time the new socket has not yet opened a connection.
-    void notify(int accept_fd, const std::string& addr)
+    // new client socket dispatch to Accept
+    void notifyToSlave(int accept_fd, const std::string& addr)
     {
         if (!vectSlaveId_.empty())
         {
-            ProtoBuffer proto;
-            proto.accept_fd_ = accept_fd;
-            proto.addr_ = addr;
+            auto proto = std::shared_ptr<NewClientProto>(new NewClientProto);
+            proto->accept_fd_ = accept_fd;
+            proto->addr_ = addr;
             if (balance_ >= vectSlaveId_.size())
             {
                 balance_ = 0;
             }
             int slaveId = vectSlaveId_[balance_++];
-            bool ret = send<ProtoBuffer>(slaveId, "new_accept", proto);
-            if (ret)
+            if (OpenThread::Send(slaveId, proto))
             {
                 return;
             }
+            printf("Listener::notifyToSlave send faild pid = %d\n", slaveId);
         }
-        openSocket_.close(pid_, accept_fd);
+        App::Instance_.openSocket_.close(pid_, accept_fd);
     }
-    virtual void onSocket(const Data& data)
+    void onSocketProto(const SocketProto& proto)
     {
-        auto proto = data.proto<OpenSocketMsg>();
-        if (!proto)
+        const auto& msg = proto.data_;
+        switch (msg->type_)
         {
-            assert(false);
-            return;
-        }
-        switch (proto->type_)
-        {
-            //Listen for socket connections
         case OpenSocket::ESocketAccept:
-            notify(proto->ud_, proto->data());
-            printf("Listener::onStart [%s]ESocketAccept:acceptFd = %d\n", ThreadName((int)proto->uid_).c_str(), proto->ud_);
+            // linsten new client socket
+            notifyToSlave(msg->ud_, msg->data());
+            printf("Listener::onSocket [%s]ESocketAccept:acceptFd = %d\n", ThreadName((int)msg->uid_).c_str(), msg->ud_);
             break;
         case OpenSocket::ESocketClose:
-            isOpening_ = false;
             break;
         case OpenSocket::ESocketError:
-            printf("Listener::onStart [%s]ESocketError:%s\n", ThreadName((int)proto->uid_).c_str(), proto->info());
+            printf("Listener::onSocket [%s]ESocketError:%s\n", ThreadName((int)msg->uid_).c_str(), msg->info());
             break;
         case OpenSocket::ESocketWarning:
-            printf("Listener::onStart [%s]ESocketWarning:%s\n", ThreadName((int)proto->uid_).c_str(), proto->info());
+            printf("Listener::onSocket [%s]ESocketWarning:%s\n", ThreadName((int)msg->uid_).c_str(), msg->info());
             break;
         case OpenSocket::ESocketOpen:
-            isOpening_ = true;
             break;
         case OpenSocket::ESocketUdp:
         case OpenSocket::ESocketData:
@@ -833,160 +862,123 @@ public:
     }
 };
 
-////////////Accepter//////////////////////
-//client object
-struct Client
+////////////HttpRequest//////////////////////
+struct HttpRequest
 {
-    int fd_; // socket’s fd 
-    std::string addr_; //ip:port
-    std::string buffer_; //received network data
-    Client() :fd_(-1) {}
+    int fd_;
+    std::string addr_;
+
+    std::string method_;
+    std::string url_;
+
+    int code_;
+    int clen_;
+    std::string head_;
+    std::string body_;
+    std::map<std::string, std::string> headers_;
+    HttpRequest() :fd_(-1), code_(-1), clen_(-1) {}
+
+    //GET /xx/xx HTTP/x.x
+    bool parseHeader();
+    bool pushData(const char* data, size_t size);
 };
 
-//Receive the listener’s new socket fd, open the socket connection and communicate with the client.
-class Accepter : public Worker
+////////////Accepter//////////////////////
+class Accepter : public OpenThreadWorker
 {
     int listenId_;
-    int maxClient_;
-    Hashid hashid_;
-    std::vector<Client> vectClient_;
+    std::map<int, HttpRequest> mapClient_;
 public:
     Accepter(const std::string& name)
-        :Worker(name),
+        :OpenThreadWorker(name),
         listenId_(-1)
     {
-        //Specify the number of sockets that the accepter can handle.
-        maxClient_ = 8;
-        hashid_.init(maxClient_);
-        vectClient_.resize(maxClient_);
-        mapKeyFunc_["new_accept"] = { (Handle)&Accepter::new_accept };
+        registers(SocketProto::ProtoType(), (OpenThreadHandle)&Accepter::onSocketProto);
+        registers(NewClientProto::ProtoType(), (OpenThreadHandle)&Accepter::onNewClientProto);
     }
     virtual ~Accepter() {}
     virtual void onStart() 
     { 
-        //Wait for listener to start first.
         while (listenId_ < 0)
         {
             listenId_ = ThreadId("listener");
             OpenThread::Sleep(1000);
         }
-        //Send registration message to listener.
-        send<std::string>(listenId_, "regist_slave", "listen success!");
-    }
-    //Receive new socket messages from Listener and open socket connection to receive messages from clients.
-    void new_accept(const Data& data)
-    {
-        auto proto = data.proto<ProtoBuffer>();
-        if (!proto)
-        {
-            assert(false);
+        auto proto = std::shared_ptr<RegisterProto>(new RegisterProto);
+        proto->srcPid_ = pid();
+        if (OpenThread::Send(listenId_, proto))
             return;
-        }
-        int accept_fd = proto->accept_fd_;
+        printf("Accepter::onStart send faild pid = %d\n", listenId_);
+    }
+    void onNewClientProto(const NewClientProto& proto)
+    {
+        int accept_fd = proto.accept_fd_;
         if (accept_fd >= 0)
         {
-            if (hashid_.full())
+            auto iter = mapClient_.find(accept_fd);
+            if (iter != mapClient_.end())
             {
-                openSocket_.close(pid_, accept_fd);
+                assert(false);
+                mapClient_.erase(iter);
+                App::Instance_.openSocket_.close(pid(), accept_fd);
                 return;
             }
-            int idx = hashid_.insert(accept_fd);
-            if (idx < 0 || idx >= vectClient_.size())
-            {
-                openSocket_.close(pid_, accept_fd);
-                return;
-            }
-            vectClient_[idx].fd_ = accept_fd;
-            vectClient_[idx].addr_ = proto->addr_;
-            vectClient_[idx].buffer_.clear();
-            //Open socket connection and receive messages from clients. Add accept_fd to poll.
-            openSocket_.start(pid_, accept_fd);
+            auto& client = mapClient_[accept_fd];
+            client.fd_ = accept_fd;
+            client.addr_ = proto.addr_;
+            App::Instance_.openSocket_.start(pid_, accept_fd);
         }
     }
     //GET /xx/xx HTTP/x.x
-    void onReadHttp(Client& client)
+    void onReadHttp(const std::shared_ptr<OpenSocketMsg> msg)
     {
-        auto& buffer = client.buffer_;
-        if (buffer.size() < 8)
-            return;
-        if (buffer[0] != 'G' || buffer[1] != 'E' || buffer[2] != 'T')
-            return;
-        auto idx = buffer.find(" HTTP/");
-        if (idx == std::string::npos)
+        auto iter = mapClient_.find(msg->fd_);
+        if (iter == mapClient_.end())
         {
-            if (buffer.size() > 1024)
-            {
-                openSocket_.close(pid_, client.fd_);
-            }
+            App::Instance_.openSocket_.close(pid_, msg->fd_);
             return;
         }
-        std::string url;
-        size_t i = 3;
-        while (buffer[i] == ' ' && i < buffer.size()) ++i;
-        for (; i < buffer.size(); ++i)
+        auto& request = iter->second;
+        if (!request.pushData(msg->data(), msg->size()))
         {
-            if (buffer[i] == ' ') break;
-            url.push_back(buffer[i]);
+            //Header too large.close connet.
+            if (request.head_.size() > 1024)
+                App::Instance_.openSocket_.close(pid_, msg->fd_);
+            return;
         }
-        printf("new client:url = %s\n", url.c_str());
+        printf("new client:url = %s\n", request.url_.c_str());
         std::string content;
-        content.append("<div>It's work!</div><br/>" + client.addr_ + "request:" + url);
-        std::string msg = "HTTP/1.1 200 OK\r\ncontent-length:" + std::to_string(content.size()) + "\r\n\r\n" + content;
-        //Send Http message to client.
-        openSocket_.send(client.fd_, msg);
+        content.append("<div>It's work!</div><br/>" + request.addr_ + "request:" + request.url_);
+        std::string buffer = "HTTP/1.1 200 OK\r\ncontent-length:" + std::to_string(content.size()) + "\r\n\r\n" + content;
+        App::Instance_.openSocket_.send(msg->fd_, buffer.data(), (int)buffer.size());
     }
-    virtual void onSocket(const Data& data)
+    virtual void onSocketProto(const SocketProto& proto)
     {
-        auto proto = data.proto<OpenSocketMsg>();
-        if (!proto)
+        const auto& msg = proto.data_;
+        switch (msg->type_)
         {
-            assert(false);
-            return;
-        }
-        int idx = 0;
-        switch (proto->type_)
-        {
-            //Receive message from client. 
         case OpenSocket::ESocketData:
-            idx = hashid_.lookup(proto->fd_);
-            if (idx < 0 || idx >= vectClient_.size())
-            {
-                openSocket_.close(pid_, proto->fd_);
-                return;
-            }
-            vectClient_[idx].buffer_.append(proto->data(), proto->size());
-            onReadHttp(vectClient_[idx]);
+            onReadHttp(msg);
             break;
-            //Close connection with client message.
         case OpenSocket::ESocketClose:
-            idx = hashid_.remove(proto->fd_);
-            if (idx >= 0 && idx < vectClient_.size())
-            {
-                vectClient_[idx].fd_ = -1;
-                vectClient_[idx].buffer_.clear();
-            }
+            mapClient_.erase(msg->fd_);
             break;
-            //Error message when communicating with client. 
         case OpenSocket::ESocketError:
-            idx = hashid_.remove(proto->fd_);
-            if (idx >= 0 && idx < vectClient_.size())
-            {
-                vectClient_[idx].fd_ = -1;
-                vectClient_[idx].buffer_.clear();
-            }
-            printf("Accepter::onStart [%s]ESocketError:%s\n", ThreadName((int)proto->uid_).c_str(), proto->info());
+            mapClient_.erase(msg->fd_);
+            printf("Accepter::onStart [%s]ESocketError:%s\n", ThreadName((int)msg->uid_).c_str(), msg->info());
             break;
         case OpenSocket::ESocketWarning:
-            printf("Accepter::onStart [%s]ESocketWarning:%s\n", ThreadName((int)proto->uid_).c_str(), proto->info());
+            printf("Accepter::onStart [%s]ESocketWarning:%s\n", ThreadName((int)msg->uid_).c_str(), msg->info());
             break;
-            //Open communication with client message. 
         case OpenSocket::ESocketOpen:
-            idx = hashid_.lookup(proto->fd_);
-            if (idx < 0 || idx >= vectClient_.size())
+        {
+            auto iter = mapClient_.find(msg->fd_);
+            if (iter == mapClient_.end())
             {
-                openSocket_.close(pid_, proto->fd_);
+                App::Instance_.openSocket_.close(pid_, msg->fd_);
                 return;
             }
+        }
             break;
         case OpenSocket::ESocketAccept:
         case OpenSocket::ESocketUdp:
@@ -999,10 +991,8 @@ public:
 };
 int main()
 {
-    //Start OpenSocket; can only be started once
-    openSocket_.run(SocketFunc);
     printf("start server==>>\n");
-    std::vector<Worker*> vectServer = {
+    std::vector<OpenThreader*> vectServer = {
         new Listener("listener"),
         new Accepter("accepter1"),
         new Accepter("accepter2"),
@@ -1011,17 +1001,133 @@ int main()
     };
     for (size_t i = 0; i < vectServer.size(); ++i)
         vectServer[i]->start();
+
     printf("wait close==>>\n");
     OpenThread::ThreadJoinAll();
     for (size_t i = 0; i < vectServer.size(); ++i)
         delete vectServer[i];
     vectServer.clear();
+    
     printf("Pause\n");
     return getchar();
 }
+
+
+bool HttpRequest::parseHeader()
+{
+    if (!headers_.empty() || head_.size() < 12) return true;
+    std::string line;
+    const char* ptr = strstr(head_.c_str(), "\r\n");
+    if (!ptr) return false;
+    clen_ = -1;
+    line.append(head_.c_str(), ptr - head_.c_str());
+
+    int state = 0;
+    method_.clear();
+    url_.clear();
+    for (size_t k = 0; k < line.size(); ++k)
+    {
+        if (state == 0)
+        {
+            if (line[k] != ' ')
+            {
+                method_.push_back(line[k]);
+                continue;
+            }
+            state = 1;
+            while (k < line.size() && line[k] == ' ') ++k;
+            if (line[k] != ' ') --k;
+        }
+        else
+        {
+            if (line[k] != ' ')
+            {
+                url_.push_back(line[k]);
+                continue;
+            }
+            break;
+        }
+    }
+
+    line.clear();
+    int k = -1;
+    int j = -1;
+    std::string key;
+    std::string value;
+    for (size_t i = ptr - head_.c_str() + 2; i < head_.size() - 1; i++)
+    {
+        if (head_[i] == '\r' && head_[i + 1] == '\n')
+        {
+            if (j > 0)
+            {
+                k = 0;
+                while (k < line.size() && line[k] == ' ') ++k;
+                while (k >= 0 && line.back() == ' ') line.pop_back();
+                value = line.data() + j + 1;
+                while (j >= 0 && line[j] == ' ') j--;
+                key.clear();
+                key.append(line.data(), j);
+                for (size_t x = 0; x < key.size(); x++)
+                    key[x] = std::tolower(key[x]);
+                headers_[key] = value;
+            }
+            ++i;
+            j = -1;
+            line.clear();
+            continue;
+        }
+        line.push_back(head_[i]);
+        if (j < 0 && line.back() == ':')
+        {
+            j = (int)line.size() - 1;
+        }
+    }
+    clen_ = std::atoi(headers_["content-length"].c_str());
+    return true;
+}
+
+bool HttpRequest::pushData(const char* data, size_t size)
+{
+    if (code_ == -1)
+    {
+        head_.append(data, size);
+        const char* ptr = strstr(head_.data(), "\r\n\r\n");
+        if (!ptr) return false;
+        code_ = 0;
+        body_.append(ptr + 4);
+        head_.resize(ptr - head_.data() + 2);
+        if (!parseHeader()) return false;
+    }
+    else
+    {
+        body_.append(data, size);
+    }
+    if (clen_ >= 0)
+    {
+        if (clen_ == 0 && clen_ == body_.size())
+        {
+            return true;
+        }
+        if (clen_ >= body_.size())
+        {
+            body_.resize(clen_);
+            return true;
+        }
+    }
+    else if (body_.size() > 2)
+    {
+        if (body_[body_.size() - 2] == '\r' && body_.back() == '\n')
+        {
+            body_.pop_back();
+            body_.pop_back();
+            return true;
+        }
+    }
+    return false;
+}
 ```
 
-## 2.Socket TCP communication
+## 4.Socket TCP communication
 he Listener is responsible for listening to socket connection events and sending socket connection events to the Accepter.
 
 The Accepter is responsible for receiving socket connection events sent by the Listener and communicating with the socket.
@@ -1033,39 +1139,101 @@ Client is a client cluster that can be used to perform stress tests on the serve
 #include <map>
 #include <set>
 #include <memory>
-
 #include "opensocket.h"
-#include "openthread.h"
-#include "worker.h"
+#include "open/openthread.h"
 using namespace open;
 
 const std::string TestServerIp_ = "0.0.0.0";
 const std::string TestClientIp_ = "127.0.0.1";
 const int TestServerPort_ = 8888;
 
-static OpenSocket openSocket_;
-static void SocketFunc(const OpenSocketMsg* msg)
+//proto
+struct SocketProto : public OpenThreadProto
 {
-    if (msg->uid_ >= 0)
+    std::shared_ptr<OpenSocketMsg> data_;
+    static inline int ProtoType() { return 1; }
+    virtual inline int protoType() const { return SocketProto::ProtoType(); }
+};
+
+class ProtoBuffer : public OpenThreadProto
+{
+    void* data_;
+public:
+    int msgId_;
+    ProtoBuffer() : OpenThreadProto(), msgId_(0) , data_(0) {}
+    virtual ~ProtoBuffer() { if (data_) delete data_; }
+    template <class T>
+    inline T& data()
     {
-        auto data = std::shared_ptr<Data>(new Data());
-        auto proto = std::shared_ptr<const OpenSocketMsg>(msg);
-        data->setProto(EProtoSocket, proto);
-        bool ret = OpenThread::Send((int)msg->uid_, data);
-        assert(ret);
+        T* t = 0;
+        if (data_)
+        {
+            t = dynamic_cast<T*>((T*)data_);
+            if (data_ == t) return *t;
+            delete data_;
+        }
+        t = new T;
+        data_ = t;
+        return *t;
     }
-    else
+    template <class T>
+    inline T& data() const
     {
+        if (data_)
+        {
+            T* t = dynamic_cast<T*>((T*)data_);
+            if (data_ == t) return *t;
+        }
+        assert(false);
+        static T t;
+        return t;
+    }
+    static inline int ProtoType() { return 2; }
+    virtual inline int protoType() const { return ProtoBuffer::ProtoType(); }
+};
+
+////////////App//////////////////////
+class App
+{
+    static void SocketFunc(const OpenSocketMsg* msg)
+    {
+        if (!msg) return;
+        if (msg->uid_ >= 0)
+        {
+            auto proto = std::shared_ptr<SocketProto>(new SocketProto);
+            proto->srcPid_ = -1;
+            proto->srcName_ = "OpenSocket";
+            proto->data_ = std::shared_ptr<OpenSocketMsg>((OpenSocketMsg*)msg);
+            if (!OpenThread::Send((int)msg->uid_, proto))
+                printf("SocketFunc dispatch faild pid = %lld\n", msg->uid_);
+            return;
+        }
         delete msg;
     }
-}
+public:
+    static App Instance_;
+    OpenSocket openSocket_;
+    App() { openSocket_.run(App::SocketFunc); }
+};
+App App::Instance_;
+
+
+enum EMsgId
+{
+    new_accept,
+    new_client,
+    test_client
+};
+
+
 ////////////Listener//////////////////////
-struct ProtoBuffer
+struct DataNewClient
 {
     int accept_fd_;
     std::string addr_;
+    DataNewClient() :accept_fd_(-1) {}
 };
-class Listener : public Worker
+class Listener : public OpenThreadWorker
 {
     std::set<int> setSlaveId_;
     std::vector<int> vectSlaveId_;
@@ -1074,40 +1242,41 @@ class Listener : public Worker
     bool isOpening_;
 public:
     Listener(const std::string& name)
-        :Worker(name),
+        :OpenThreadWorker(name),
         listen_fd_(-1)
     {
         isOpening_ = false;
         balance_ = 0;
-        mapKeyFunc_["regist_slave"] = { (Handle)&Listener::regist_slave };
+
+        registers(SocketProto::ProtoType(), (OpenThreadHandle)&Listener::onSocketProto);
+        registers(ProtoBuffer::ProtoType(), (OpenThreadHandle)&Listener::onProtoBuffer);
     }
     virtual ~Listener() {}
     virtual void onStart()
     {
-        listen_fd_ = openSocket_.listen((uintptr_t)pid(), TestServerIp_, TestServerPort_, 64);
+        listen_fd_ = App::Instance_.openSocket_.listen((uintptr_t)pid(), TestServerIp_, TestServerPort_, 64);
         if (listen_fd_ < 0)
         {
             printf("Listener::onStart faild listen_fd_ = %d\n", listen_fd_);
             assert(false);
         }
-        openSocket_.start((uintptr_t)pid(), listen_fd_);
+        App::Instance_.openSocket_.start((uintptr_t)pid(), listen_fd_);
     }
-    void regist_slave(const Data& data)
+private:
+    void onProtoBuffer(const ProtoBuffer& proto)
     {
-        auto proto = data.proto<std::string>();
-        if (!proto)
+        if (proto.msgId_ == new_accept)
         {
-            assert(false);
-            return;
-        }
-        assert(*proto == "listen success!");
-        if (data.srcPid() >= 0)
-        {
-            if (setSlaveId_.find(data.srcPid()) == setSlaveId_.end())
+            auto msg = proto.data<std::string>();
+            assert(msg == "listen success!");
+            if (proto.srcPid() >= 0)
             {
-                setSlaveId_.insert(data.srcPid());
-                vectSlaveId_.push_back(data.srcPid());
-                printf("Hello OpenThread, srcPid = %d\n", data.srcPid());
+                if (setSlaveId_.find(proto.srcPid()) == setSlaveId_.end())
+                {
+                    setSlaveId_.insert(proto.srcPid());
+                    vectSlaveId_.push_back(proto.srcPid());
+                    printf("Hello OpenSocket, srcPid = %d\n", proto.srcPid());
+                }
             }
         }
     }
@@ -1115,44 +1284,38 @@ public:
     {
         if (!vectSlaveId_.empty())
         {
-            ProtoBuffer proto;
-            proto.accept_fd_ = accept_fd;
-            proto.addr_ = addr;
+            auto proto = std::shared_ptr<ProtoBuffer>(new ProtoBuffer);
+            proto->msgId_ = new_client;
+            auto& msg = proto->data<DataNewClient>();
+            msg.accept_fd_ = accept_fd;
+            msg.addr_ = addr;
             if (balance_ >= vectSlaveId_.size())
             {
                 balance_ = 0;
             }
             int slaveId = vectSlaveId_[balance_++];
-            bool ret = send<ProtoBuffer>(slaveId, "new_accept", proto);
-            if (ret)
-            {
-                return;
-            }
+            bool ret = send(slaveId, proto);
+            if (ret) return;
         }
-        openSocket_.close(pid_, accept_fd);
+        App::Instance_.openSocket_.close(pid_, accept_fd);
     }
-    virtual void onSocket(const Data& data)
+    virtual void onSocketProto(const SocketProto& proto)
     {
-        auto proto = data.proto<OpenSocketMsg>();
-        if (!proto)
-        {
-            assert(false);
-            return;
-        }
-        switch (proto->type_)
+        const auto msg = proto.data_;
+        switch (msg->type_)
         {
         case OpenSocket::ESocketAccept:
-            notify(proto->ud_, proto->data());
-            printf("Listener::onStart [%s]ESocketAccept:acceptFd = %d\n", ThreadName((int)proto->uid_).c_str(), proto->ud_);
+            notify(msg->ud_, msg->data());
+            printf("Listener::onStart [%s]ESocketAccept:acceptFd = %d\n", ThreadName((int)msg->uid_).c_str(), msg->ud_);
             break;
         case OpenSocket::ESocketClose:
             isOpening_ = false;
             break;
         case OpenSocket::ESocketError:
-            printf("Listener::onStart [%s]ESocketError:%s\n", ThreadName((int)proto->uid_).c_str(), proto->info());
+            printf("Listener::onStart [%s]ESocketError:%s\n", ThreadName((int)msg->uid_).c_str(), msg->info());
             break;
         case OpenSocket::ESocketWarning:
-            printf("Listener::onStart [%s]ESocketWarning:%s\n", ThreadName((int)proto->uid_).c_str(), proto->info());
+            printf("Listener::onStart [%s]ESocketWarning:%s\n", ThreadName((int)msg->uid_).c_str(), msg->info());
             break;
         case OpenSocket::ESocketOpen:
             isOpening_ = true;
@@ -1175,21 +1338,17 @@ struct ServerClient
     std::string buffer_;
     ServerClient() :fd_(-1) {}
 };
-class Accepter : public Worker
+class Accepter : public OpenThreadWorker
 {
     int listenId_;
-    int maxClient_;
-    Hashid hashid_;
-    std::vector<ServerClient> vectClient_;
+    std::map<int, ServerClient> mapClient_;
 public:
     Accepter(const std::string& name)
-        :Worker(name),
+        :OpenThreadWorker(name),
         listenId_(-1)
     {
-        maxClient_ = 8;
-        hashid_.init(maxClient_);
-        vectClient_.resize(maxClient_);
-        mapKeyFunc_["new_accept"] = { (Handle)&Accepter::new_accept };
+        registers(SocketProto::ProtoType(), (OpenThreadHandle)&Accepter::onSocketProto);
+        registers(ProtoBuffer::ProtoType(), (OpenThreadHandle)&Accepter::onProtoBuffer);
     }
     virtual ~Accepter() {}
 
@@ -1200,94 +1359,84 @@ public:
             listenId_ = ThreadId("listener");
             OpenThread::Sleep(1000);
         }
-        send<std::string>(listenId_, "regist_slave", "listen success!");
+        auto root = std::shared_ptr<ProtoBuffer>(new ProtoBuffer);
+        root->msgId_ = new_accept;
+        auto& data = root->data<std::string>();
+        data = "listen success!";
+        send(listenId_, root);
+    }
+private:
+    void onProtoBuffer(const ProtoBuffer& proto)
+    {
+        if (proto.msgId_ == new_client)
+        {
+            auto msg = proto.data<DataNewClient>();
+            int accept_fd = msg.accept_fd_;
+            if (accept_fd >= 0)
+            {
+                auto iter = mapClient_.find(accept_fd);
+                if (iter != mapClient_.end())
+                {
+                    assert(false);
+                    mapClient_.erase(iter);
+                    App::Instance_.openSocket_.close(pid(), accept_fd);
+                    return;
+                }
+
+                auto& client = mapClient_[accept_fd];
+                client.fd_ = accept_fd;
+                client.addr_ = msg.addr_;
+                App::Instance_.openSocket_.start(pid_, accept_fd);
+            }
+        }
     }
 
-    void new_accept(const Data& data)
+    void onRead(const std::shared_ptr<OpenSocketMsg>& msg)
     {
-        auto proto = data.proto<ProtoBuffer>();
-        if (!proto)
+        auto iter = mapClient_.find(msg->fd_);
+        if (iter == mapClient_.end())
         {
-            assert(false);
+            App::Instance_.openSocket_.close(pid_, msg->fd_);
             return;
         }
-        int accept_fd = proto->accept_fd_;
-        if (accept_fd >= 0)
-        {
-            if (hashid_.full())
-            {
-                openSocket_.close(pid_, accept_fd);
-                return;
-            }
-            int idx = hashid_.insert(accept_fd);
-            if (idx < 0 || idx >= vectClient_.size())
-            {
-                openSocket_.close(pid_, accept_fd);
-                return;
-            }
-            vectClient_[idx].fd_ = accept_fd;
-            vectClient_[idx].addr_ = proto->addr_;
-            vectClient_[idx].buffer_.clear();
-            openSocket_.start(pid_, accept_fd);
-        }
-    }
-    void onRead(ServerClient& client)
-    {
+        auto& client = iter->second;
+        client.buffer_.append(msg->data(), msg->size());
         auto& buffer = client.buffer_;
         if (buffer.empty())
             return;
-        std::string msg = "[" + name_  + "]" + client.addr_ + ":" + buffer;
+
+        std::string data = "[" + name_  + "]" + client.addr_ + ":" + buffer;
         client.buffer_.clear();
-        openSocket_.send(client.fd_, msg);
+        App::Instance_.openSocket_.send(client.fd_, data.data(), (int)data.size());
     }
-    virtual void onSocket(const Data& data)
+
+    virtual void onSocketProto(const SocketProto& proto)
     {
-        auto proto = data.proto<OpenSocketMsg>();
-        if (!proto)
-        {
-            assert(false);
-            return;
-        }
-        int idx = 0;
-        switch (proto->type_)
+        const auto msg = proto.data_;
+        switch (msg->type_)
         {
         case OpenSocket::ESocketData:
-            idx = hashid_.lookup(proto->fd_);
-            if (idx < 0 || idx >= vectClient_.size())
-            {
-                openSocket_.close(pid_, proto->fd_);
-                return;
-            }
-            vectClient_[idx].buffer_.append(proto->data(), proto->size());
-            onRead(vectClient_[idx]);
+            onRead(msg);
             break;
         case OpenSocket::ESocketClose:
-            idx = hashid_.remove(proto->fd_);
-            if (idx >= 0 && idx < vectClient_.size())
-            {
-                vectClient_[idx].fd_ = -1;
-                vectClient_[idx].buffer_.clear();
-            }
+            mapClient_.erase(msg->fd_);
             break;
         case OpenSocket::ESocketError:
-            idx = hashid_.remove(proto->fd_);
-            if (idx >= 0 && idx < vectClient_.size())
-            {
-                vectClient_[idx].fd_ = -1;
-                vectClient_[idx].buffer_.clear();
-            }
-            printf("Accepter::onStart [%s]ESocketError:%s\n", ThreadName((int)proto->uid_).c_str(), proto->info());
+            mapClient_.erase(msg->fd_);
+            printf("Accepter::onStart [%s]ESocketError:%s\n", ThreadName((int)msg->uid_).c_str(), msg->info());
             break;
         case OpenSocket::ESocketWarning:
-            printf("Accepter::onStart [%s]ESocketWarning:%s\n", ThreadName((int)proto->uid_).c_str(), proto->info());
+            printf("Accepter::onStart [%s]ESocketWarning:%s\n", ThreadName((int)msg->uid_).c_str(), msg->info());
             break;
         case OpenSocket::ESocketOpen:
-            idx = hashid_.lookup(proto->fd_);
-            if (idx < 0 || idx >= vectClient_.size())
+        {
+            auto iter = mapClient_.find(msg->fd_);
+            if (iter == mapClient_.end())
             {
-                openSocket_.close(pid_, proto->fd_);
+                App::Instance_.openSocket_.close(pid_, msg->fd_);
                 return;
             }
+        }
             break;
         case OpenSocket::ESocketAccept:
         case OpenSocket::ESocketUdp:
@@ -1298,9 +1447,11 @@ public:
         }
     }
 };
+
 struct TestMsg
 {
     int count_;
+    TestMsg() :count_(0) {}
 };
 struct User
 {
@@ -1308,116 +1459,88 @@ struct User
     int userId_;
     std::string buffer_;
 };
-class Client : public Worker
+class Client : public OpenThreadWorker
 {
-    int maxUser_;
-    Hashid hashid_;
-    std::vector<User> vectUser_;
+    std::map<int, User> mapUser_;
 public:
     Client(const std::string& name)
-        :Worker(name)
+        :OpenThreadWorker(name)
     {
-        maxUser_ = 0;
-        mapKeyFunc_["start_test"] = { (Handle)&Client::start_test };
+        registers(SocketProto::ProtoType(), (OpenThreadHandle)&Client::onSocketProto);
+        registers(ProtoBuffer::ProtoType(), (OpenThreadHandle)&Client::onProtoBuffer);
     }
     virtual ~Client() {}
     virtual void onStart()
     {
     }
-    void start_test(const Data& data)
+private:
+    void onProtoBuffer(const ProtoBuffer& proto)
     {
-        if (!vectUser_.empty())
+        if (proto.msgId_ == test_client)
         {
-            assert(false);
-            return;
-        }
-        auto proto = data.proto<TestMsg>();
-        if (!proto || proto->count_ <= 0)
-        {
-            assert(false);
-            return;
-        }
-        int fd = -1;
-        int idx = 0;
-        maxUser_ = proto->count_;
-        hashid_.init(maxUser_);
-        vectUser_.resize(maxUser_);
-        for (int i = 0; i < maxUser_; i++)
-        {
-            fd = openSocket_.connect(pid_, TestClientIp_, TestServerPort_);
-            if (fd < 0)
+            auto msg = proto.data<TestMsg>();
+            int count = msg.count_;
+            int fd = 0;
+            for (int i = 0; i < count; i++)
             {
-                printf("Client::start_test faild fd = %d\n", fd);
-                assert(0);
+                fd = App::Instance_.openSocket_.connect(pid_, TestClientIp_, TestServerPort_);
+                if (fd < 0)
+                {
+                    printf("Client::start_test faild fd = %d\n", fd);
+                    assert(0);
+                }
+                auto& user = mapUser_[fd];
+                user.fd_ = fd;
+                user.userId_ = pid_ + i * 1000;
+                printf("Client::start_test[%s] fd = %d \n", name().c_str(), fd);
             }
-            idx = hashid_.insert(fd);
-            if (idx < 0 || idx >= vectUser_.size())
-            {
-                openSocket_.close(pid_, fd);
-                return;
-            }
-            vectUser_[idx].fd_ = fd;
-            vectUser_[idx].userId_ = pid_ + i * 1000;
-            vectUser_[idx].buffer_.clear();
-            printf("Client::start_test[%s] fd = %d \n", name().c_str(), fd);
         }
     }
-    void onRead(User& user)
+    void onRead(const std::shared_ptr<OpenSocketMsg>& msg)
     {
-        auto& buffer = user.buffer_;
+        auto iter = mapUser_.find(msg->fd_);
+        if (iter == mapUser_.end())
+        {
+            App::Instance_.openSocket_.close(pid_, msg->fd_);
+            return;
+        }
+        auto& user = iter->second;
+        user.buffer_.append(msg->data(), msg->size());
         printf("Client::onRead[%s:%d]:%s\n", name().c_str(), user.userId_, user.buffer_.c_str());
         user.buffer_.clear();
         OpenSocket::Sleep(500);
-        openSocket_.send(user.fd_, "Hello OpenSocket!");
+        std::string data = "Hello OpenSocket!";
+        App::Instance_.openSocket_.send(user.fd_, data.data(), (int)data.size());
     }
-    virtual void onSocket(const Data& data)
+    virtual void onSocketProto(const SocketProto& proto)
     {
-        auto proto = data.proto<OpenSocketMsg>();
-        if (!proto)
-        {
-            assert(false);
-        }
-        int idx = 0;
-        switch (proto->type_)
+        const auto msg = proto.data_;
+        switch (msg->type_)
         {
         case OpenSocket::ESocketData:
-            idx = hashid_.lookup(proto->fd_);
-            if (idx < 0 || idx >= vectUser_.size())
-            {
-                openSocket_.close(pid_, proto->fd_);
-                return;
-            }
-            vectUser_[idx].buffer_.append(proto->data(), proto->size());
-            onRead(vectUser_[idx]);
+            onRead(msg);
             break;
         case OpenSocket::ESocketClose:
-            idx = hashid_.remove(proto->fd_);
-            if (idx >= 0 && idx < vectUser_.size())
-            {
-                vectUser_[idx].fd_ = -1;
-                vectUser_[idx].buffer_.clear();
-            }
+            mapUser_.erase(msg->fd_);
             break;
         case OpenSocket::ESocketError:
-            idx = hashid_.remove(proto->fd_);
-            if (idx >= 0 && idx < vectUser_.size())
-            {
-                vectUser_[idx].fd_ = -1;
-                vectUser_[idx].buffer_.clear();
-            }
-            printf("Client::onStart [%s]ESocketError:%s\n", ThreadName((int)proto->uid_).c_str(), proto->info());
+            mapUser_.erase(msg->fd_);
+            printf("Client::onStart [%s]ESocketError:%s\n", ThreadName((int)msg->uid_).c_str(), msg->info());
             break;
         case OpenSocket::ESocketWarning:
-            printf("Client::onStart [%s]ESocketWarning:%s\n", ThreadName((int)proto->uid_).c_str(), proto->info());
+            printf("Client::onStart [%s]ESocketWarning:%s\n", ThreadName((int)msg->uid_).c_str(), msg->info());
             break;
         case OpenSocket::ESocketOpen:
-            idx = hashid_.lookup(proto->fd_);
-            if (idx < 0 || idx >= vectUser_.size())
+        {
+            auto iter = mapUser_.find(msg->fd_);
+            if (iter == mapUser_.end())
             {
-                openSocket_.close(pid_, proto->fd_);
+                App::Instance_.openSocket_.close(pid_, msg->fd_);
                 return;
             }
-            openSocket_.send(proto->fd_, "Hello OpenSocket!");
+            std::string buffer = "Hello OpenSocket!";
+            App::Instance_.openSocket_.send(msg->fd_, buffer.data(), (int)buffer.size());
+        }
             break;
         case OpenSocket::ESocketAccept:
         case OpenSocket::ESocketUdp:
@@ -1428,14 +1551,14 @@ public:
         }
     }
 };
+
 int main()
 {
-    openSocket_.run(SocketFunc);
-    std::vector<Worker*> vectWorker;
+    std::vector<OpenThreadWorker*> vectWorker;
 
     printf("start server==>>\n");
     //server
-    std::vector<Worker*> vectServer =
+    std::vector<OpenThreadWorker*> vectServer =
     {
         new Listener("listener"),
         new Accepter("accepter1"),
@@ -1455,7 +1578,7 @@ int main()
 
     printf("start client==>>\n");
     //client
-    std::vector<Worker*> vectClient =
+    std::vector<OpenThreadWorker*> vectClient =
     {
         new Client("client1"),
         new Client("client2"),
@@ -1468,11 +1591,14 @@ int main()
         vectClient[i]->start();
     }
 
-    TestMsg proto;
-    proto.count_ = 4;
+    auto proto = std::shared_ptr<ProtoBuffer>(new ProtoBuffer);
+    proto->msgId_ = test_client;
+    auto& data = proto->data<TestMsg>();
+    data.count_ = 10;
+    //
     for (size_t i = 0; i < vectClient.size(); i++)
     {
-        vectClient[i]->send<TestMsg>(vectClient[i]->pid(), "start_test", proto);
+        vectClient[i]->send(vectClient[i]->pid(), proto);
     }
 
     printf("wait close==>>\n");

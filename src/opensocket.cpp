@@ -494,7 +494,7 @@ force_close(struct socket_server *ss, struct socket *s, struct socket_lock *l, s
 
 void 
 socket_server_release(struct socket_server *ss) {
-	int i;
+	int i = 0;
 	struct socket_message dummy;
 	for (i=0;i<MAX_SOCKET;i++) {
 		struct socket *s = &ss->slot[i];
@@ -510,6 +510,24 @@ socket_server_release(struct socket_server *ss) {
 	sp_release(ss->event_fd);
 	FREE(ss);
 	socket_stop();
+}
+
+void
+socket_server_close(struct socket_server* ss) {
+	int i = 0;
+	struct socket_message dummy;
+	for (i = 0; i < MAX_SOCKET; i++) {
+		struct socket* s = &ss->slot[i];
+		struct socket_lock l;
+		socket_lock_init(s, &l);
+		if (s->type != SOCKET_TYPE_RESERVE) {
+			force_close(ss, s, &l, &dummy);
+		}
+		spinlock_destroy(&s->dw_lock);
+	}
+	//socket_close(ss->sendctrl_fd);
+	//socket_close(ss->recvctrl_fd);
+	sp_release(ss->event_fd);
 }
 
 static inline void
@@ -2016,12 +2034,27 @@ OpenSocket::OpenSocket()
 {
 	cb_ = 0;
 	isRunning_ = false;
+	isClose_ = true;
 	socket_server_ = (void*)socket_server_create(time(NULL));
 	assert(socket_server_);
 }
 
 OpenSocket::~OpenSocket()
 {
+	if (!isClose_)
+	{
+		if (isRunning_)
+		{
+			socket_server_close((struct socket_server*)socket_server_);
+			isRunning_ = false;
+			while (!isClose_)
+			{
+				Sleep(100);
+			}
+		}
+	}
+	isRunning_ = false;
+	Sleep(300);
 	if (socket_server_)
 	{
 		socket_server_release((struct socket_server*)socket_server_);
@@ -2071,12 +2104,14 @@ void* OpenSocket::ThreadSocket(void* p)
 		return 0;
 	}
 	that->isRunning_ = true;
+	that->isClose_ = false;
 	int r = 0;
 	while (that->isRunning_)
 	{
 		r = that->poll();
 		if (r == 0) break;
 	}
+	that->isClose_ = true;
 	return 0;
 }
 
