@@ -9,7 +9,6 @@ using namespace open;
 const std::string TestServerIp_ = "0.0.0.0";
 const std::string TestClientIp_ = "127.0.0.1";
 const int TestServerPort_ = 8888;
-OpenSocket openSocket_;
 
 struct ProtoBuffer
 {
@@ -48,13 +47,13 @@ void ListenThread(OpenThreadMsg& msg)
     if (msg.state_ == OpenThread::START)
     {
         while (OpenThread::ThreadId("accept") < 0) OpenThread::Sleep(100);
-        listen_fd_ = openSocket_.listen((uintptr_t)pid, TestServerIp_, TestServerPort_, 64);
+        listen_fd_ = OpenSocket::Instance().listen((uintptr_t)pid, TestServerIp_, TestServerPort_, 64);
         if (listen_fd_ < 0)
         {
             printf("Listen::START faild listen_fd_ = %d\n", listen_fd_);
             assert(false);
         }
-        openSocket_.start((uintptr_t)pid, listen_fd_);
+        OpenSocket::Instance().start((uintptr_t)pid, listen_fd_);
     }
     else if (msg.state_ == OpenThread::RUN)
     {
@@ -96,7 +95,7 @@ void ListenThread(OpenThreadMsg& msg)
     }
     else if (msg.state_ == OpenThread::STOP)
     {
-        openSocket_.close(pid, listen_fd_);
+        OpenSocket::Instance().close(pid, listen_fd_);
     }
 }
 
@@ -116,7 +115,7 @@ void AcceptThread(OpenThreadMsg& msg)
         if (!proto->isSocket_)
         {
             printf("Accept::RUN  [%s]open accept client:%s\n", pname.c_str(), proto->addr_.c_str());
-            openSocket_.start(pid, proto->acceptFd_);
+            OpenSocket::Instance().start(pid, proto->acceptFd_);
         }
         else
         {
@@ -143,7 +142,7 @@ void AcceptThread(OpenThreadMsg& msg)
                     std::string tmp = "Of Course,I Still Love You!";
                     *(int*)buffer = (int)tmp.size();
                     memcpy(buffer + 4, tmp.data(), tmp.size());
-                    openSocket_.send(socketMsg->fd_, buffer, (int)(4 + tmp.size()));
+                    OpenSocket::Instance().send(socketMsg->fd_, buffer, (int)(4 + tmp.size()));
                 }
             }
                 break;
@@ -179,7 +178,7 @@ void ClientThread(OpenThreadMsg& msg)
     if (msg.state_ == OpenThread::START)
     {
         while (OpenThread::ThreadId("accept") < 0) OpenThread::Sleep(100);
-        client_fd_ = openSocket_.connect(pid, TestClientIp_, TestServerPort_);
+        client_fd_ = OpenSocket::Instance().connect(pid, TestClientIp_, TestServerPort_);
     }
     else if (msg.state_ == OpenThread::RUN)
     {
@@ -198,7 +197,7 @@ void ClientThread(OpenThreadMsg& msg)
             std::string buffer;
             buffer.append(data + 4, len);
             assert(buffer == "Of Course,I Still Love You!");
-            openSocket_.close(pid, socketMsg->fd_);
+            OpenSocket::Instance().close(pid, socketMsg->fd_);
 
             OpenThread::StopAll();
         }
@@ -211,7 +210,7 @@ void ClientThread(OpenThreadMsg& msg)
             std::string tmp = "Waiting for you!";
             *(int*)buffer = (int)tmp.size();
             memcpy(buffer + 4, tmp.data(), tmp.size());
-            openSocket_.send(client_fd_, buffer, (int)(4 + tmp.size()));
+            OpenSocket::Instance().send(client_fd_, buffer, (int)(4 + tmp.size()));
         }
             break;
         case OpenSocket::ESocketClose:
@@ -241,7 +240,7 @@ int main()
     OpenThread::Create("client", ClientThread);
 
     // run OpenSocket
-    openSocket_.run(SocketFunc);
+    OpenSocket::Start(SocketFunc);
 
     OpenThread::ThreadJoinAll();
     printf("Pause\n");

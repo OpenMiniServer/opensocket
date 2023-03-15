@@ -79,8 +79,7 @@ class App
     }
 public:
     static App Instance_;
-    OpenSocket openSocket_;
-    App() {  openSocket_.run(App::SocketFunc); }
+    App() {  OpenSocket::Start(App::SocketFunc); }
 };
 App App::Instance_;
 
@@ -126,7 +125,7 @@ private:
     void onTaskProto(TaskProto& proto)
     {
         auto& request = proto.request_;
-        proto.fd_ = App::Instance_.openSocket_.connect(pid(), request->ip_, request->port_);
+        proto.fd_ = OpenSocket::Instance().connect(pid(), request->ip_, request->port_);
         request->response_.code_ = -1;
         request->response_.head_.clear();
         request->response_.body_.clear();
@@ -137,7 +136,7 @@ private:
         auto iter = mapFdToTask_.find(data->fd_);
         if (iter == mapFdToTask_.end())
         {
-            App::Instance_.openSocket_.close(pid(), data->fd_);
+            OpenSocket::Instance().close(pid(), data->fd_);
             return;
         }
         auto& task = iter->second;
@@ -158,21 +157,21 @@ private:
         {
             buffer.append("\r\n");
         }
-        App::Instance_.openSocket_.send(task.fd_, buffer.data(), (int)buffer.size());
+        OpenSocket::Instance().send(task.fd_, buffer.data(), (int)buffer.size());
     }
     void onReadHttp(const std::shared_ptr<OpenSocketMsg>& data)
     {
         auto iter = mapFdToTask_.find(data->fd_);
         if (iter == mapFdToTask_.end())
         {
-            App::Instance_.openSocket_.close(pid(), data->fd_);
+            OpenSocket::Instance().close(pid(), data->fd_);
             return;
         }
         auto& task = iter->second;
         auto& response = task.request_->response_;
         if (response.pushData(data->data(), data->size()))
         {
-            App::Instance_.openSocket_.close(pid(), data->fd_);
+            OpenSocket::Instance().close(pid(), data->fd_);
         }
     }
     void onCloseHttp(const std::shared_ptr<OpenSocketMsg>& data)

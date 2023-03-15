@@ -81,8 +81,7 @@ class App
     }
 public:
     static App Instance_;
-    OpenSocket openSocket_;
-    App() { openSocket_.run(App::SocketFunc); }
+    App() { OpenSocket::Start(App::SocketFunc); }
 };
 App App::Instance_;
 
@@ -123,13 +122,13 @@ public:
     virtual ~Listener() {}
     virtual void onStart()
     {
-        listen_fd_ = App::Instance_.openSocket_.listen((uintptr_t)pid(), TestServerIp_, TestServerPort_, 64);
+        listen_fd_ = OpenSocket::Instance().listen((uintptr_t)pid(), TestServerIp_, TestServerPort_, 64);
         if (listen_fd_ < 0)
         {
             printf("Listener::onStart faild listen_fd_ = %d\n", listen_fd_);
             assert(false);
         }
-        App::Instance_.openSocket_.start((uintptr_t)pid(), listen_fd_);
+        OpenSocket::Instance().start((uintptr_t)pid(), listen_fd_);
     }
 private:
     void onProtoBuffer(const ProtoBuffer& proto)
@@ -166,7 +165,7 @@ private:
             bool ret = send(slaveId, proto);
             if (ret) return;
         }
-        App::Instance_.openSocket_.close(pid_, accept_fd);
+        OpenSocket::Instance().close(pid_, accept_fd);
     }
     virtual void onSocketProto(const SocketProto& proto)
     {
@@ -248,14 +247,14 @@ private:
                 {
                     assert(false);
                     mapClient_.erase(iter);
-                    App::Instance_.openSocket_.close(pid(), accept_fd);
+                    OpenSocket::Instance().close(pid(), accept_fd);
                     return;
                 }
 
                 auto& client = mapClient_[accept_fd];
                 client.fd_ = accept_fd;
                 client.addr_ = msg.addr_;
-                App::Instance_.openSocket_.start(pid_, accept_fd);
+                OpenSocket::Instance().start(pid_, accept_fd);
             }
         }
     }
@@ -265,7 +264,7 @@ private:
         auto iter = mapClient_.find(msg->fd_);
         if (iter == mapClient_.end())
         {
-            App::Instance_.openSocket_.close(pid_, msg->fd_);
+            OpenSocket::Instance().close(pid_, msg->fd_);
             return;
         }
         auto& client = iter->second;
@@ -276,7 +275,7 @@ private:
 
         std::string data = "[" + name_  + "]" + client.addr_ + ":" + buffer;
         client.buffer_.clear();
-        App::Instance_.openSocket_.send(client.fd_, data.data(), (int)data.size());
+        OpenSocket::Instance().send(client.fd_, data.data(), (int)data.size());
     }
 
     virtual void onSocketProto(const SocketProto& proto)
@@ -302,7 +301,7 @@ private:
             auto iter = mapClient_.find(msg->fd_);
             if (iter == mapClient_.end())
             {
-                App::Instance_.openSocket_.close(pid_, msg->fd_);
+                OpenSocket::Instance().close(pid_, msg->fd_);
                 return;
             }
         }
@@ -352,7 +351,7 @@ private:
             int fd = 0;
             for (int i = 0; i < count; i++)
             {
-                fd = App::Instance_.openSocket_.connect(pid_, TestClientIp_, TestServerPort_);
+                fd = OpenSocket::Instance().connect(pid_, TestClientIp_, TestServerPort_);
                 if (fd < 0)
                 {
                     printf("Client::start_test faild fd = %d\n", fd);
@@ -370,7 +369,7 @@ private:
         auto iter = mapUser_.find(msg->fd_);
         if (iter == mapUser_.end())
         {
-            App::Instance_.openSocket_.close(pid_, msg->fd_);
+            OpenSocket::Instance().close(pid_, msg->fd_);
             return;
         }
         auto& user = iter->second;
@@ -379,7 +378,7 @@ private:
         user.buffer_.clear();
         OpenSocket::Sleep(500);
         std::string data = "Hello OpenSocket!";
-        App::Instance_.openSocket_.send(user.fd_, data.data(), (int)data.size());
+        OpenSocket::Instance().send(user.fd_, data.data(), (int)data.size());
     }
     virtual void onSocketProto(const SocketProto& proto)
     {
@@ -404,11 +403,11 @@ private:
             auto iter = mapUser_.find(msg->fd_);
             if (iter == mapUser_.end())
             {
-                App::Instance_.openSocket_.close(pid_, msg->fd_);
+                OpenSocket::Instance().close(pid_, msg->fd_);
                 return;
             }
             std::string buffer = "Hello OpenSocket!";
-            App::Instance_.openSocket_.send(msg->fd_, buffer.data(), (int)buffer.size());
+            OpenSocket::Instance().send(msg->fd_, buffer.data(), (int)buffer.size());
         }
             break;
         case OpenSocket::ESocketAccept:

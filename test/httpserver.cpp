@@ -59,8 +59,7 @@ class App
     }
 public:
     static App Instance_;
-    OpenSocket openSocket_;
-    App() { openSocket_.run(App::SocketFunc); }
+    App() { OpenSocket::Start(App::SocketFunc); }
 };
 App App::Instance_;
 
@@ -83,13 +82,13 @@ public:
     virtual ~Listener() {}
     virtual void onStart()
     {
-        listen_fd_ = App::Instance_.openSocket_.listen((uintptr_t)pid(), TestServerIp_, TestServerPort_, 64);
+        listen_fd_ = OpenSocket::Instance().listen((uintptr_t)pid(), TestServerIp_, TestServerPort_, 64);
         if (listen_fd_ < 0)
         {
             printf("Listener::onStart faild listen_fd_ = %d\n", listen_fd_);
             assert(false);
         }
-        App::Instance_.openSocket_.start((uintptr_t)pid(), listen_fd_);
+        OpenSocket::Instance().start((uintptr_t)pid(), listen_fd_);
         printf("HTTP: %s:%d\n", TestServerIp_.c_str(), TestServerPort_);
     }
     void onRegisterProto(const RegisterProto& proto)
@@ -123,7 +122,7 @@ public:
             }
             printf("Listener::notifyToSlave send faild pid = %d\n", slaveId);
         }
-        App::Instance_.openSocket_.close(pid_, accept_fd);
+        OpenSocket::Instance().close(pid_, accept_fd);
     }
     void onSocketProto(const SocketProto& proto)
     {
@@ -213,13 +212,13 @@ public:
             {
                 assert(false);
                 mapClient_.erase(iter);
-                App::Instance_.openSocket_.close(pid(), accept_fd);
+                OpenSocket::Instance().close(pid(), accept_fd);
                 return;
             }
             auto& client = mapClient_[accept_fd];
             client.fd_ = accept_fd;
             client.addr_ = proto.addr_;
-            App::Instance_.openSocket_.start(pid_, accept_fd);
+            OpenSocket::Instance().start(pid_, accept_fd);
         }
     }
     //GET /xx/xx HTTP/x.x
@@ -228,7 +227,7 @@ public:
         auto iter = mapClient_.find(msg->fd_);
         if (iter == mapClient_.end())
         {
-            App::Instance_.openSocket_.close(pid_, msg->fd_);
+            OpenSocket::Instance().close(pid_, msg->fd_);
             return;
         }
         auto& request = iter->second;
@@ -236,14 +235,14 @@ public:
         {
             //Header too large.close connet.
             if (request.head_.size() > 1024)
-                App::Instance_.openSocket_.close(pid_, msg->fd_);
+                OpenSocket::Instance().close(pid_, msg->fd_);
             return;
         }
         printf("new client:url = %s\n", request.url_.c_str());
         std::string content;
         content.append("<div>It's work!</div><br/>" + request.addr_ + "request:" + request.url_);
         std::string buffer = "HTTP/1.1 200 OK\r\ncontent-length:" + std::to_string(content.size()) + "\r\n\r\n" + content;
-        App::Instance_.openSocket_.send(msg->fd_, buffer.data(), (int)buffer.size());
+        OpenSocket::Instance().send(msg->fd_, buffer.data(), (int)buffer.size());
     }
     virtual void onSocketProto(const SocketProto& proto)
     {
@@ -268,7 +267,7 @@ public:
             auto iter = mapClient_.find(msg->fd_);
             if (iter == mapClient_.end())
             {
-                App::Instance_.openSocket_.close(pid_, msg->fd_);
+                OpenSocket::Instance().close(pid_, msg->fd_);
                 return;
             }
         }

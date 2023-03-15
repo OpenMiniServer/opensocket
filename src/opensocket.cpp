@@ -2475,4 +2475,16 @@ void OpenSocket::Sleep(int64_t milliSecond)
 #endif
 }
 
+void OpenSocket::Start(void (*cb)(const Msg*))
+{
+	if (Instance_.isRunning())
+	{
+		assert(false);
+		return;
+	}
+	Instance_.run(cb);
+}
+
+OpenSocket OpenSocket::Instance_;
+
 };

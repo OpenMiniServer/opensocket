@@ -101,18 +101,22 @@ public:
 	int udpAddress(const char* address, char* udp_addr, int len);
 
 	void socketInfo(std::vector<Info>& vectInfo);
+	inline bool isRunning() { return isRunning_; }
 
 	static void Sleep(int64_t milliSecond);
 	static std::string DomainNameToIp(std::string& domain);
+	static OpenSocket& Instance() { return Instance_; }
+	static void Start(void (*cb)(const Msg*));
 private:
-	void forwardMsg(EMsgType type, bool padding, struct socket_message* result);
 	int poll();
+	void forwardMsg(EMsgType type, bool padding, struct socket_message* result);
 	static void* ThreadSocket(void* p);
 
 	void (*cb_)(const Msg*);
 	bool isRunning_;
 	bool isClose_;
 	void* socket_server_;
+	static OpenSocket Instance_;
 };
 
 typedef OpenSocket::Msg OpenSocketMsg;
