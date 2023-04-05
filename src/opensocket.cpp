@@ -398,7 +398,7 @@ socket_server_create(uint64_t time) {
 		fprintf(stderr, "socket-server: create event pool failed.\n");
 		return NULL;
 	}
-	if (pipe(fd)) {
+	if (socket_pipe(fd)) {
 		sp_release(efd);
 		fprintf(stderr, "socket-server: create socket pair failed.\n");
 		return NULL;
@@ -827,16 +827,16 @@ send_buffer_(struct socket_server *ss, struct socket *s, struct socket_lock *l, 
 		sp_write(ss->event_fd, s->fd, s, false);			
 
 		if (s->type == SOCKET_TYPE_HALFCLOSE) {
-				force_close(ss, s, l, result);
-				return SOCKET_CLOSE;
+			force_close(ss, s, l, result);
+			return SOCKET_CLOSE;
 		}
 		if(s->warn_size > 0){
-				s->warn_size = 0;
-				result->opaque = s->opaque;
-				result->id = s->id;
-				result->ud = 0;
-				result->data = NULL;
-				return SOCKET_WARNING;
+			s->warn_size = 0;
+			result->opaque = s->opaque;
+			result->id = s->id;
+			result->ud = 0;
+			result->data = NULL;
+			return SOCKET_WARNING;
 		}
 	}
 
@@ -985,14 +985,22 @@ send_socket(struct socket_server *ss, struct request_send * request, struct sock
 		}
 	}
 	if (s->wb_size >= WARNING_SIZE && s->wb_size >= s->warn_size) {
-		s->warn_size = s->warn_size == 0 ? WARNING_SIZE *2 : s->warn_size*2;
+		s->warn_size = s->warn_size == 0 ? WARNING_SIZE * 2 : s->warn_size * 2;
 		result->opaque = s->opaque;
 		result->id = s->id;
-		result->ud = (int)(s->wb_size%1024 == 0 ? s->wb_size/1024 : s->wb_size/1024 + 1);
+		result->ud = (int)(s->wb_size % 1024 == 0 ? s->wb_size / 1024 : s->wb_size / 1024 + 1);
 		result->data = NULL;
+		if (result->ud <= 0) {
+			result->ud = 1;
+		}
 		return SOCKET_WARNING;
 	}
-	return -1;
+	s->warn_size = 1;
+	result->opaque = s->opaque;
+	result->id = s->id;
+	result->ud = 1;
+	result->data = NULL;
+	return SOCKET_WARNING;
 }
 
 static int
@@ -1252,6 +1260,7 @@ ctrl_cmd(struct socket_server *ss, struct socket_message *result) {
 		int priority = (type == 'D') ? PRIORITY_HIGH : PRIORITY_LOW;
 		struct request_send * request = (struct request_send *) buffer;
 		int ret = send_socket(ss, request, result, priority, NULL);
+		//printf("ctrl_cmd ==<< id =%d\n", request->id);
 		dec_sending_ref(ss, request->id);
 		return ret;
 	}
@@ -1281,7 +1290,7 @@ forward_message_tcp(struct socket_server *ss, struct socket *s, struct socket_lo
 	int sz = s->p.size;
 	char * buffer = (char*)MALLOC(sz);
 	int n = (int)socket_read(s->fd, buffer, sz);
-	if (n<0) {
+	if (n < 0) {
 		FREE(buffer);
 		switch(errno) {
 		case EINTR:
@@ -1297,7 +1306,7 @@ forward_message_tcp(struct socket_server *ss, struct socket *s, struct socket_lo
 		}
 		return -1;
 	}
-	if (n==0) {
+	if (n == 0) {
 		FREE(buffer);
 		force_close(ss, s, l, result);
 		return SOCKET_CLOSE;
@@ -1696,6 +1705,7 @@ int socket_server_send(struct socket_server *ss, int id, const void * buffer, in
 		}
 		socket_unlock(&l);
 	}
+	//printf("socket_server_send ==>> id =%d\n", id);
 	inc_sending_ref(s, id);
 
 	struct request_package request = {0};
@@ -1704,7 +1714,8 @@ int socket_server_send(struct socket_server *ss, int id, const void * buffer, in
 	request.u.send.buffer = (char *)buffer;
 
 	send_request(ss, &request, 'D', sizeof(request.u.send));
-	return 0;
+	//return 0;
+	return 1;
 }
 
 // return -1 when error, 0 when success
@@ -2103,6 +2114,14 @@ void* OpenSocket::ThreadSocket(void* p)
 		assert(false);
 		return 0;
 	}
+#if defined(WIN32) || defined(_WIN32) || defined(WIN64) || defined(_WIN64)
+#else
+#ifdef _GNU_SOURCE
+	pthread_setname_np(pthread_self(), "OpenSocket");
+#else
+	prctl(PR_SET_NAME, (unsigned long)"OpenSocket");
+#endif
+#endif
 	that->isRunning_ = true;
 	that->isClose_ = false;
 	int r = 0;
@@ -2299,16 +2318,16 @@ void OpenSocket::start(uintptr_t uid, int fd)
 	send_request(ss, &request, 'S', sizeof(request.u.start));
 }
 
-int OpenSocket::udp(uintptr_t uid, const std::string& addr, int port)
+int OpenSocket::udp(uintptr_t uid, const char* addr, int port)
 {
 	struct socket_server* ss = (struct socket_server*)socket_server_;
-	return socket_server_udp(ss, uid, addr.c_str(), port);
+	return socket_server_udp(ss, uid, addr, port);
 }
 
-int OpenSocket::udpConnect(int fd, const std::string& addr, int port)
+int OpenSocket::udpConnect(int fd, const char* addr, int port)
 {
 	struct socket_server* ss = (struct socket_server*)socket_server_;
-	return socket_server_udp_connect(ss, fd, addr.c_str(), port);
+	return socket_server_udp_connect(ss, fd, addr, port);
 }
 
 int OpenSocket::udpSend(int fd, const char* address, const void* buffer, int sz)
@@ -2321,7 +2340,7 @@ int OpenSocket::udpSend(int fd, const char* address, const void* buffer, int sz)
 	return socket_server_udp_send(ss, fd, (const struct socket_udp_address*)address, sbuffer, sz);
 }
 
-int OpenSocket::udpAddress(const char* address, char* udp_addr, int len)
+int OpenSocket::UDPAddress(const char* address, std::string& ip , int& po)
 {
 	if (!address) return -1;
 	int type = address[0];
@@ -2344,7 +2363,9 @@ int OpenSocket::udpAddress(const char* address, char* udp_addr, int len)
 	if (!inet_ntop(family, addrptr, strptr, sizeof(strptr))) {
 		return -1;
 	}
-	snprintf(udp_addr, len, "%s:%d", strptr, port);
+	ip = strptr;
+	po = port;
+	//snprintf(udp_addr, len, "%s:%d", strptr, port);
 	return 0;
 }
 
@@ -2421,7 +2442,7 @@ static bool CheckIp(const char* ip)
 	return false;
 }
 
-std::string OpenSocket::DomainNameToIp(std::string& domain)
+const std::string OpenSocket::DomainNameToIp(const std::string& domain)
 {
 	if (CheckIp(domain.c_str())) return domain;
 	std::string ip;

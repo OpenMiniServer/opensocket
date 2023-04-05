@@ -235,7 +235,7 @@ int socket_stop();
 
 int socket_getsockopt(SOCKET s, int level, int optname, void* optval, int* optlen);
 int socket_setsockopt(SOCKET s, int level, int optname, const void* optval, int optlen);
-int pipe(int fds[2]);
+int socket_pipe(int fds[2]);
 
 #else
 
@@ -281,6 +281,9 @@ static inline int socket_close(int fd) {
 
 #define socket_getsockopt getsockopt
 #define socket_setsockopt setsockopt
+
+#define socket_pipe pipe
+//int socket_pipe(int fds[2]);
 
 inline int socket_start() { return 0; }
 inline int socket_stop() { return 0; }

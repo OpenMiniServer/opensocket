@@ -1,6 +1,7 @@
 #include "socket_os.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 
 //////////////poll//////////////
@@ -547,71 +548,141 @@ int socket_stop()
     return 0;
 }
 
-int pipe(int fds[2]) 
+int socket_pipe(int fds[2])
 {
-    int err = socket_start();
-    if (err != 0)
-    {
-        return err;
-    }
-    struct sockaddr_in name;
-    int namelen = sizeof(name);
-    SOCKET server = INVALID_SOCKET;
-    SOCKET client1 = INVALID_SOCKET;
-    SOCKET client2 = INVALID_SOCKET;
+	int err = socket_start();
+	if (err != 0)
+	{
+		return err;
+	}
+	struct sockaddr_in name;
+	int namelen = sizeof(name);
+	SOCKET server = INVALID_SOCKET;
+	SOCKET client1 = INVALID_SOCKET;
+	SOCKET client2 = INVALID_SOCKET;
 
-    memset(&name, 0, sizeof(name));
-    name.sin_family = AF_INET;
-    name.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    name.sin_port = 0;
+	memset(&name, 0, sizeof(name));
+	name.sin_family = AF_INET;
+	name.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	name.sin_port = 0;
 
-    server = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (server == INVALID_SOCKET)
-        goto failed;
+	server = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	if (server == INVALID_SOCKET)
+		goto failed;
 
-    int yes=1;
-    if (setsockopt(server,SOL_SOCKET,SO_REUSEADDR,(char*)&yes,sizeof(yes)) == SOCKET_ERROR)
-       goto failed;          
+	int yes = 1;
+	if (setsockopt(server, SOL_SOCKET, SO_REUSEADDR, (char*)&yes, sizeof(yes)) == SOCKET_ERROR)
+		goto failed;
 
-    if (bind(server, (struct sockaddr*)&name, namelen) == SOCKET_ERROR) 
-        goto failed;
+	if (bind(server, (struct sockaddr*)&name, namelen) == SOCKET_ERROR)
+		goto failed;
 
-    if (listen(server, 5) == SOCKET_ERROR)
-        goto failed;
+	if (listen(server, 5) == SOCKET_ERROR)
+		goto failed;
 
-    if(getsockname(server, (struct sockaddr*)&name, &namelen) == SOCKET_ERROR)
-        goto failed;
+	if (getsockname(server, (struct sockaddr*)&name, &namelen) == SOCKET_ERROR)
+		goto failed;
 
-    client1 = socket(AF_INET, SOCK_STREAM, 0);
-    if (client1 == INVALID_SOCKET)
-        goto failed;
+	client1 = socket(AF_INET, SOCK_STREAM, 0);
+	if (client1 == INVALID_SOCKET)
+		goto failed;
 
-    if (connect(client1, (struct sockaddr*)&name, namelen) == SOCKET_ERROR)
-        goto failed;
+	if (connect(client1, (struct sockaddr*)&name, namelen) == SOCKET_ERROR)
+		goto failed;
 
-    client2 = accept(server, (struct sockaddr*)&name, &namelen);
-    if (client2 == INVALID_SOCKET)
-        goto failed;
+	client2 = accept(server, (struct sockaddr*)&name, &namelen);
+	if (client2 == INVALID_SOCKET)
+		goto failed;
 
-    // closesocket(server);
-    fds[0] = (int)client1;
-    fds[1] = (int)client2;
-    return 0;
+	// closesocket(server);
+	fds[0] = (int)client1;
+	fds[1] = (int)client2;
+	return 0;
 
 failed:
-    if (server != INVALID_SOCKET)
-        closesocket(server);
+	if (server != INVALID_SOCKET)
+		closesocket(server);
 
-    if (client1 != INVALID_SOCKET)
-        closesocket(client1);
+	if (client1 != INVALID_SOCKET)
+		closesocket(client1);
 
-    if (client2 != INVALID_SOCKET)
-        closesocket(client2);
-    return -1;
+	if (client2 != INVALID_SOCKET)
+		closesocket(client2);
+	return -1;
 }
+
+#else
+
+//int socket_pipe(int fds[2])
+//{
+//	int err = socket_start();
+//	if (err != 0)
+//	{
+//		return err;
+//	}
+//	struct sockaddr_in name;
+//	int namelen = sizeof(name);
+//	int INVALID_SOCKET = -1;
+//	int SOCKET_ERROR = -1;
+//	int server = INVALID_SOCKET;
+//	int client1 = INVALID_SOCKET;
+//	int client2 = INVALID_SOCKET;
+//
+//	memset(&name, 0, sizeof(name));
+//	name.sin_family = AF_INET;
+//	name.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+//	name.sin_port = 0;
+//
+//	server = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+//	if (server == INVALID_SOCKET)
+//		goto failed;
+//
+//	int yes = 1;
+//	if (setsockopt(server, SOL_SOCKET, SO_REUSEADDR, (char*)&yes, sizeof(yes)) == SOCKET_ERROR)
+//		goto failed;
+//
+//	if (bind(server, (struct sockaddr*)&name, namelen) == SOCKET_ERROR)
+//		goto failed;
+//
+//	if (listen(server, 5) == SOCKET_ERROR)
+//		goto failed;
+//
+//	if (getsockname(server, (struct sockaddr*)&name, &namelen) == SOCKET_ERROR)
+//		goto failed;
+//
+//	client1 = socket(AF_INET, SOCK_STREAM, 0);
+//	if (client1 == INVALID_SOCKET)
+//		goto failed;
+//
+//	if (connect(client1, (struct sockaddr*)&name, namelen) == SOCKET_ERROR)
+//		goto failed;
+//
+//	client2 = accept(server, (struct sockaddr*)&name, &namelen);
+//	if (client2 == INVALID_SOCKET)
+//		goto failed;
+//
+//	// closesocket(server);
+//	fds[0] = (int)client1;
+//	fds[1] = (int)client2;
+//	return 0;
+//
+//failed:
+//	if (server != INVALID_SOCKET)
+//		close(server);
+//
+//	if (client1 != INVALID_SOCKET)
+//		close(client1);
+//
+//	if (client2 != INVALID_SOCKET)
+//		close(client2);
+//	return -1;
+//}
+
+#endif
+
+
 
 //////////////socket//////////////
 
 
 
-#endif

@@ -5,6 +5,9 @@
 #include <string>
 #include <vector>
 
+
+#define UDP_ADDRESS_SIZE 19	// ipv6 128bit + port 16bit + 1 byte type
+
 namespace open
 {
 
@@ -95,16 +98,16 @@ public:
 	void start(uintptr_t uid, int fd);
 
 	//udp part
-	int udp(uintptr_t uid, const std::string& addr, int port);
-	int udpConnect(int fd, const std::string& addr, int port);
+	int udp(uintptr_t uid, const char* addr, int port);
+	int udpConnect(int fd, const char* addr, int port);
 	int udpSend(int fd, const char* address, const void* buffer, int sz);
-	int udpAddress(const char* address, char* udp_addr, int len);
+	static int UDPAddress(const char* address, std::string& ip, int& port);
 
 	void socketInfo(std::vector<Info>& vectInfo);
 	inline bool isRunning() { return isRunning_; }
 
 	static void Sleep(int64_t milliSecond);
-	static std::string DomainNameToIp(std::string& domain);
+	static const std::string DomainNameToIp(const std::string& domain);
 	static OpenSocket& Instance() { return Instance_; }
 	static void Start(void (*cb)(const Msg*));
 private:
